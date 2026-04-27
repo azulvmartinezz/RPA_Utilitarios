@@ -1,5 +1,6 @@
 import os
 import time
+import datetime
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -48,8 +49,60 @@ def process_account(username, password):
         login_btn = driver.find_element(By.ID, "login")
         login_btn.click()
         
-        print("\nEsperando instrucciones para el siguiente paso...")
-        time.sleep(300) # Dejar abierto para inspeccionar
+        # 4. Navegar a la pestaña 'Reportes'
+        print("\nEsperando a que cargue la pantalla principal...")
+        reportes_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[@title='Reportes']")))
+        print("Haciendo clic en 'Reportes'...")
+        reportes_btn.click()
+        
+        # 5. Clic en 'Reporte de consumos'
+        print("Esperando la lista de reportes...")
+        reporte_consumos_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[@title='Reporte de consumos']")))
+        print("Haciendo clic en 'Reporte de consumos'...")
+        reporte_consumos_btn.click()
+        
+        # 6. Calcular fechas del mes anterior
+        today = datetime.date.today()
+        first_day_this_month = today.replace(day=1)
+        last_day_prev_month = first_day_this_month - datetime.timedelta(days=1)
+        first_day_prev_month = last_day_prev_month.replace(day=1)
+        
+        fini_str = first_day_prev_month.strftime("%d/%m/%Y")
+        ffin_str = last_day_prev_month.strftime("%d/%m/%Y")
+        
+        print(f"\nConfigurando fechas del mes anterior: {fini_str} al {ffin_str}")
+        
+        # 7. Inyectar las fechas en los campos (como son readonly, usamos JavaScript)
+        # Esperamos a que los campos existan en el DOM
+        wait.until(EC.presence_of_element_located((By.ID, "fini")))
+        driver.execute_script(f"document.getElementById('fini').value = '{fini_str}';")
+        driver.execute_script(f"document.getElementById('ffin').value = '{ffin_str}';")
+        
+        print("Fechas configuradas exitosamente.")
+        
+        # 8. Hacer clic en Procesar
+        print("\nHaciendo clic en 'Procesar'...")
+        procesar_btn = driver.find_element(By.ID, "btn_submit")
+        procesar_btn.click()
+        
+        # 9. Clic en 'Detalles por Venta Unitaria'
+        print("\nEsperando a que cargue el resumen del reporte...")
+        detalles_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]")))
+        print("Haciendo clic en 'Detalles por Venta Unitaria'...")
+        detalles_btn.click()
+        
+        # 10. Descargar XLS de 'Todos los consumos'
+        print("\nEsperando a que cargue la tabla detallada de consumos...")
+        # Usamos un XPath que busque el input de imagen dentro de la fila que dice 'Todos los consumos.'
+        descargar_xls_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//tr[td[contains(normalize-space(text()), 'Todos los consumos.')]]//input[@type='image']")))
+        print("Haciendo clic en el botón de Excel de 'Todos los consumos'...")
+        descargar_xls_btn.click()
+        
+        # 11. Esperar a que la descarga se inicie/complete
+        print("\nDescarga iniciada. Esperando 15 segundos para asegurar que el archivo se termine de descargar...")
+        time.sleep(15)
+        
+        print(f"✅ Proceso de descarga completado para {username}.")
         
     except Exception as e:
         print(f"Ocurrió un error con la cuenta {username}: {e}")
