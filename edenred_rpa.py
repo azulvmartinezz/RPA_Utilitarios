@@ -111,9 +111,35 @@ def main():
         except Exception as e:
             print(f"No se pudo ingresar la contraseña: {e}")
             
-        # 8. Esperar en el dashboard
-        print("\nEsperando en la pantalla principal (dashboard)...")
-        time.sleep(300) # Dejar abierto para inspeccionar el dashboard
+        # 8. Esperar a que cargue el dashboard y hacer clic en "Apps premium"
+        print("\nEsperando a que cargue el dashboard...")
+        try:
+            # Esperamos a que el botón 'Apps premium' sea clickeable
+            apps_premium_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@value='Apps premium']")))
+            print("Haciendo clic en 'Apps premium'...")
+            apps_premium_btn.click()
+            
+            # Dejamos un tiempo para que carguen los elementos de la pestaña
+            time.sleep(2) 
+        except Exception as e:
+            print(f"No se pudo encontrar o hacer clic en 'Apps premium': {e}")
+            
+        # 9. Hacer clic en Ticket Car ®
+        print("\nBuscando el acceso a 'Ticket Car ®'...")
+        try:
+            # Seleccionamos la imagen por su atributo alt y subimos al elemento <a> padre para hacer clic
+            ticket_car_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//img[@alt='Ticket Car ®']/parent::a")))
+            print("Haciendo clic en 'Ticket Car ®'...")
+            ticket_car_btn.click()
+            
+            # Pausa para que cargue la nueva página de operación
+            time.sleep(5)
+        except Exception as e:
+            print(f"No se pudo encontrar o hacer clic en 'Ticket Car ®': {e}")
+            
+        # 10. Esperar instrucciones para el siguiente paso
+        print("\nEsperando en la pantalla principal de Ticket Car...")
+        time.sleep(300) # Dejar abierto para seguir inspeccionando
         
     except Exception as e:
         print(f"Ocurrió un error en el flujo: {e}")
