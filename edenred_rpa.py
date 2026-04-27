@@ -1,5 +1,6 @@
 import os
 import time
+import datetime
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -137,10 +138,72 @@ def main():
         except Exception as e:
             print(f"No se pudo encontrar o hacer clic en 'Ticket Car ®': {e}")
             
-        # 10. Esperar instrucciones para el siguiente paso
-        print("\nEsperando en la pantalla principal de Ticket Car...")
-        time.sleep(300) # Dejar abierto para seguir inspeccionando
+        # 10. Cambiar a la nueva pestaña de Ticket Car (suele abrirse en pestaña nueva)
+        print("\nCambiando a la pestaña de Ticket Car...")
+        driver.switch_to.window(driver.window_handles[-1])
         
+        # 11. Clic en "Reportes" del menú superior
+        print("Buscando menú 'Reportes'...")
+        reportes_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Reportes') and contains(@href, 'MicrositioReportes')]")))
+        reportes_menu.click()
+        
+        # 12. Clic en "Resumen de Reportes" en el menú lateral
+        print("Buscando 'Resumen de Reportes'...")
+        resumen_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Resumen de Reportes')]")))
+        resumen_menu.click()
+        
+        # 13. Clic en "Reportes Financieros"
+        print("Seleccionando 'Reportes Financieros'...")
+        financieros_btn = wait.until(EC.element_to_be_clickable((By.ID, "ctl00_contenido_ucCategoriasReportes_lnkFinancieros")))
+        financieros_btn.click()
+        
+        # 14. Seleccionar "DETALLE DE MOVIMIENTOS POR FACTURACIÓN" (clic en su ícono)
+        print("Buscando reporte 'DETALLE DE MOVIMIENTOS POR FACTURACIÓN'...")
+        detalle_fact_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//tr[td[contains(text(), 'DETALLE DE MOVIMIENTOS POR FACTURACIÓN')]]//input[@type='image']")))
+        detalle_fact_btn.click()
+        
+        # 15. Seleccionar PERIODO FACTURACION (Mes anterior dinámico)
+        print("\nCalculando el mes anterior para seleccionar el periodo correcto...")
+        hoy = datetime.date.today()
+        primer_dia_este_mes = hoy.replace(day=1)
+        ultimo_dia_mes_pasado = primer_dia_este_mes - datetime.timedelta(days=1)
+        mes_pasado_str = ultimo_dia_mes_pasado.strftime("%m/%Y") # Ej. 03/2026
+        
+        periodo_select_elem = wait.until(EC.presence_of_element_located((By.ID, "ctl00_contenido_ucListadoReportes_cpFormulario_ddlPERIODOFACTURACION")))
+        from selenium.webdriver.support.ui import Select
+        periodo_select = Select(periodo_select_elem)
+        
+        opcion_encontrada = False
+        for option in periodo_select.options:
+            if mes_pasado_str in option.text:
+                print(f"Seleccionando el periodo: {option.text}")
+                periodo_select.select_by_visible_text(option.text)
+                opcion_encontrada = True
+                break
+                
+        if not opcion_encontrada:
+            print(f"⚠️ No se encontró un periodo para {mes_pasado_str} en la lista.")
+            
+        time.sleep(2) # Pausa para que carguen posibles postbacks
+        
+        # 16. Escribir destinatario y enviar
+        email_destino = os.getenv('DESTINATARIO_EMAIL', 'correo@ejemplo.com')
+        print(f"\nEnviando reporte al correo: {email_destino}")
+        
+        txt_correo = wait.until(EC.presence_of_element_located((By.ID, "ctl00_contenido_ucListadoReportes_cpDestinatarios_txtWriteMail")))
+        txt_correo.clear()
+        txt_correo.send_keys(email_destino)
+        
+        btn_agregar_correo = driver.find_element(By.ID, "ctl00_contenido_ucListadoReportes_cpDestinatarios_btnAgregarMail")
+        btn_agregar_correo.click()
+        time.sleep(1)
+        
+        print("Haciendo clic en 'Aceptar' para finalizar envío...")
+        btn_aceptar = driver.find_element(By.ID, "ctl00_contenido_ucListadoReportes_btnAceptar")
+        btn_aceptar.click()
+        
+        print("\n✅ ¡El reporte se ha programado para enviarse por correo correctamente!")
+        time.sleep(10) # Pausa para ver el mensaje de confirmación antes de cerrar
     except Exception as e:
         print(f"Ocurrió un error en el flujo: {e}")
     finally:
