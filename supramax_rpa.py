@@ -72,11 +72,25 @@ def process_account(username, password):
         
         print(f"\nConfigurando fechas del mes anterior: {fini_str} al {ffin_str}")
         
-        # 7. Inyectar las fechas en los campos (como son readonly, usamos JavaScript)
+        # 7. Inyectar las fechas y disparar eventos para que la página registre el cambio
         # Esperamos a que los campos existan en el DOM
         wait.until(EC.presence_of_element_located((By.ID, "fini")))
-        driver.execute_script(f"document.getElementById('fini').value = '{fini_str}';")
-        driver.execute_script(f"document.getElementById('ffin').value = '{ffin_str}';")
+        
+        js_code = """
+        var e_fini = document.getElementById('fini');
+        e_fini.value = arguments[0];
+        e_fini.dispatchEvent(new Event('input', { bubbles: true }));
+        e_fini.dispatchEvent(new Event('change', { bubbles: true }));
+        e_fini.dispatchEvent(new Event('blur', { bubbles: true }));
+        
+        var e_ffin = document.getElementById('ffin');
+        e_ffin.value = arguments[1];
+        e_ffin.dispatchEvent(new Event('input', { bubbles: true }));
+        e_ffin.dispatchEvent(new Event('change', { bubbles: true }));
+        e_ffin.dispatchEvent(new Event('blur', { bubbles: true }));
+        """
+        driver.execute_script(js_code, fini_str, ffin_str)
+        time.sleep(1) # Pausa para que el JS de la página asimile el cambio
         
         print("Fechas configuradas exitosamente.")
         
@@ -86,8 +100,9 @@ def process_account(username, password):
         procesar_btn.click()
         
         # 9. Clic en 'Detalles por Venta Unitaria'
-        print("\nEsperando a que cargue el resumen del reporte...")
-        detalles_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]")))
+        print("\nEsperando a que cargue el resumen del reporte (puede demorar en procesar la base de datos)...")
+        long_wait = WebDriverWait(driver, 120) # Aumentamos la espera a 2 minutos
+        detalles_btn = long_wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]")))
         print("Haciendo clic en 'Detalles por Venta Unitaria'...")
         detalles_btn.click()
         
