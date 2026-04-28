@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import datetime
 from dotenv import load_dotenv
@@ -102,21 +103,44 @@ def process_account(username, password):
         # 9. Clic en 'Detalles por Venta Unitaria'
         print("\nEsperando a que cargue el resumen del reporte (puede demorar en procesar la base de datos)...")
         long_wait = WebDriverWait(driver, 120) # Aumentamos la espera a 2 minutos
-        detalles_btn = long_wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]")))
-        print("Haciendo clic en 'Detalles por Venta Unitaria'...")
-        detalles_btn.click()
         
-        # 10. Descargar XLS de 'Todos los consumos'
-        print("\nEsperando a que cargue la tabla detallada de consumos...")
-        # Usamos un XPath que busque el input de imagen dentro de la fila que dice 'Todos los consumos.'
-        descargar_xls_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//tr[td[contains(normalize-space(text()), 'Todos los consumos.')]]//input[@type='image']")))
-        print("Haciendo clic en el botón de Excel de 'Todos los consumos'...")
-        descargar_xls_btn.click()
+        # Esperar a que aparezca el botón de Detalles O el texto de "No se encontraron registros"
+        long_wait.until(
+            lambda d: d.find_elements(By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]") or 
+                      d.find_elements(By.XPATH, "//td[contains(text(), 'No se encontraron registros')]")
+        )
         
-        # 11. Esperar a que la descarga se inicie/complete
-        print("\nDescarga iniciada. Esperando 15 segundos para asegurar que el archivo se termine de descargar...")
-        time.sleep(15)
+        # Verificar qué apareció en pantalla
+        if driver.find_elements(By.XPATH, "//td[contains(text(), 'No se encontraron registros')]"):
+            print("⚠️ No se encontraron registros de consumo para este periodo. Saltando descarga...")
+        else:
+            detalles_btn = driver.find_element(By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]")
+            print("Haciendo clic en 'Detalles por Venta Unitaria'...")
+            detalles_btn.click()
+            
+            # 10. Descargar XLS de 'Todos los consumos'
+            print("\nEsperando a que cargue la tabla detallada de consumos...")
+            # Usamos un XPath que busque el input de imagen dentro de la fila que dice 'Todos los consumos.'
+            descargar_xls_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//tr[td[contains(normalize-space(text()), 'Todos los consumos.')]]//input[@type='image']")))
+            print("Haciendo clic en el botón de Excel de 'Todos los consumos'...")
+            descargar_xls_btn.click()
+            
+            # 11. Esperar a que la descarga se inicie/complete
+            print("\nDescarga iniciada. Esperando 15 segundos para asegurar que el archivo se termine de descargar...")
+            time.sleep(15)
         
+        # Clic en SALIR
+        print("Cerrando sesión (Clic en SALIR)...")
+        try:
+            # Asegurarnos de volver al frame principal si es que estamos en algún iframe,
+            # aunque de base el botón parece estar en el top (target="_top").
+            driver.switch_to.default_content() 
+            salir_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'SALIR') or contains(@href, 'index.php?lg=1')]")))
+            salir_btn.click()
+            time.sleep(2)
+        except Exception as e:
+            print(f"⚠️ No se pudo hacer clic en SALIR, cerrando el navegador igualmente... ({e})")
+            
         print(f"✅ Proceso de descarga completado para {username}.")
         
     except Exception as e:
@@ -128,24 +152,26 @@ def process_account(username, password):
 def main():
     print("Iniciando RPA para Supramax...")
     
-    # Para trabajar la prueba con 1 empresa, leeremos temporalmente estas variables.
-    # En el futuro, reemplazaremos esto para que lea las 15 credenciales desde un CSV o archivo JSON.
-    test_user = os.getenv('SUPRAMAX_TEST_USER_ABA')
-    test_pass = os.getenv('SUPRAMAX_TEST_PASS_ABA')
+    credenciales_str = os.getenv('SUPRAMAX_CREDENTIALS')
     
-    if not test_user or not test_pass:
-        print("ERROR: Por favor agrega SUPRAMAX_TEST_USER y SUPRAMAX_TEST_PASS a tu archivo .env")
+    if not credenciales_str:
+        print("ERROR: No se encontró la variable SUPRAMAX_CREDENTIALS en tu .env")
         return
         
-    accounts_to_process = [
-        {"username": test_user, "password": test_pass}
-    ]
+    try:
+        credenciales = json.loads(credenciales_str)
+    except Exception as e:
+        print(f"ERROR: El contenido de SUPRAMAX_CREDENTIALS no es un JSON válido. ({e})")
+        return
     
-    # Iterar por cada cuenta (por ahora solo 1, pero listo para 15)
-    for account in accounts_to_process:
-        process_account(account['username'], account['password'])
+    # Iterar por cada cuenta
+    for idx, acc in enumerate(credenciales):
+        print(f"\n{'='*50}")
+        print(f"🔄 PROCESANDO EMPRESA {idx + 1} DE {len(credenciales)}: {acc['Empresa']}")
+        print(f"{'='*50}")
+        process_account(acc['Usuario'], acc['Contraseña'])
         
-    print("\nProceso global de Supramax finalizado.")
+    print("\n✅ Proceso global de Supramax finalizado.")
 
 if __name__ == "__main__":
     main()
