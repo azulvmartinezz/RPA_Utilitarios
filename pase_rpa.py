@@ -1,5 +1,6 @@
 import os
 import time
+import re
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -57,142 +58,191 @@ def main():
     url = "https://apps.pase.com.mx/uc/"
     
     try:
-        print(f"Navegando a: {url}")
-        driver.get(url)
-        time.sleep(5)
+        indice_actual = 0
+        num_clientes = 1 # Se actualizará en la primera pasada
         
-        # --- Lógica Anti-WAF (Radware) ---
-        if "validate.perfdrive.com" in driver.current_url:
-            print("\n" + "="*50)
-            print("🚨 WAF de Radware detectado (hCaptcha).")
-            print("⚠️ 2Captcha actualmente no soporta hCaptcha.")
-            print("👉 POR FAVOR, RESUELVE EL CAPTCHA MANUALMENTE EN LA VENTANA DE CHROME.")
-            print("El bot te esperará hasta 90 segundos...")
-            print("="*50 + "\n")
+        while indice_actual < num_clientes:
+            print(f"\n{'='*50}")
+            print(f"🔄 PROCESANDO CLIENTE {indice_actual + 1} DE {num_clientes if num_clientes > 1 else '?'}")
+            print(f"{'='*50}")
             
+            print(f"Navegando a: {url}")
+            driver.get(url)
+            time.sleep(5)
+            
+            # --- Lógica Anti-WAF (Radware) ---
+            if "validate.perfdrive.com" in driver.current_url:
+                print("\n" + "="*50)
+                print("🚨 WAF de Radware detectado (hCaptcha).")
+                print("⚠️ 2Captcha actualmente no soporta hCaptcha.")
+                print("👉 POR FAVOR, RESUELVE EL CAPTCHA MANUALMENTE EN LA VENTANA DE CHROME.")
+                print("El bot te esperará hasta 90 segundos...")
+                print("="*50 + "\n")
+                
+                try:
+                    # Esperar hasta que la URL cambie de validate.perfdrive.com a apps.pase.com.mx
+                    wait_waf = WebDriverWait(driver, 90)
+                    wait_waf.until(EC.url_contains("apps.pase.com.mx"))
+                    print("✅ hCaptcha resuelto manualmente. Continuando con el proceso automático...")
+                    time.sleep(3)
+                except:
+                    print("❌ Se agotó el tiempo esperando a que resolvieras el captcha.")
+                    return
+            # --- Fin Lógica Anti-WAF ---
+            
+            # 1. Llenar usuario y contraseña
+            print("Esperando los campos de usuario y contraseña...")
+            time.sleep(3) # Pausa extra para que termine de cargar el framework (React/Vue)
+            user_input = wait.until(EC.presence_of_element_located((By.ID, "username")))
+            pwd_input = wait.until(EC.presence_of_element_located((By.ID, "password")))
+            
+            print("Ingresando credenciales...")
+            user_input.send_keys(PASE_USER)
+            pwd_input.send_keys(PASE_PASSWORD)
+            
+            # 2. ReCaptcha
+            print("Buscando widget de ReCaptcha para obtener el sitekey...")
             try:
-                # Esperar hasta que la URL cambie de validate.perfdrive.com a apps.pase.com.mx
-                wait_waf = WebDriverWait(driver, 90)
-                wait_waf.until(EC.url_contains("apps.pase.com.mx"))
-                print("✅ hCaptcha resuelto manualmente. Continuando con el proceso automático...")
-                time.sleep(3)
-            except:
-                print("❌ Se agotó el tiempo esperando a que resolvieras el captcha.")
-                return
-        # --- Fin Lógica Anti-WAF ---
-        
-        # 1. Llenar usuario y contraseña
-        print("Esperando los campos de usuario y contraseña...")
-        time.sleep(3) # Pausa extra para que termine de cargar el framework (React/Vue)
-        user_input = wait.until(EC.presence_of_element_located((By.ID, "username")))
-        pwd_input = wait.until(EC.presence_of_element_located((By.ID, "password")))
-        
-        print("Ingresando credenciales...")
-        user_input.send_keys(PASE_USER)
-        pwd_input.send_keys(PASE_PASSWORD)
-        
-        # 2. ReCaptcha
-        print("Buscando widget de ReCaptcha para obtener el sitekey...")
-        try:
-            recaptcha_div = driver.find_element(By.CLASS_NAME, "g-recaptcha")
-            sitekey = recaptcha_div.get_attribute("data-sitekey")
-            
-            if sitekey:
-                print(f"Sitekey encontrado: {sitekey}")
+                recaptcha_div = driver.find_element(By.CLASS_NAME, "g-recaptcha")
+                sitekey = recaptcha_div.get_attribute("data-sitekey")
                 
-                # Resolver captcha
-                token = solve_recaptcha(sitekey, driver.current_url)
-                
-                if token:
-                    print("Inyectando token en la página...")
-                    # Insertar en el textarea oculto
-                    driver.execute_script(f"document.getElementById('g-recaptcha-response').innerHTML = '{token}';")
-                    time.sleep(1)
+                if sitekey:
+                    print(f"Sitekey encontrado: {sitekey}")
                     
-                    # Dato vital: Pase requiere que ejecutemos el callback del captcha
-                    print("Ejecutando el callback onRecaptchaValid...")
-                    driver.execute_script(f"if(typeof onRecaptchaValid !== 'undefined') {{ onRecaptchaValid('{token}'); }}")
-                    time.sleep(2)
-            else:
-                print("No se encontró el data-sitekey en el widget.")
-        except Exception as e:
-            print(f"Ocurrió un error con ReCaptcha: {e}")
+                    # Resolver captcha
+                    token = solve_recaptcha(sitekey, driver.current_url)
+                    
+                    if token:
+                        print("Inyectando token en la página...")
+                        # Insertar en el textarea oculto
+                        driver.execute_script(f"document.getElementById('g-recaptcha-response').innerHTML = '{token}';")
+                        time.sleep(1)
+                        
+                        # Dato vital: Pase requiere que ejecutemos el callback del captcha
+                        print("Ejecutando el callback onRecaptchaValid...")
+                        driver.execute_script(f"if(typeof onRecaptchaValid !== 'undefined') {{ onRecaptchaValid('{token}'); }}")
+                        time.sleep(2)
+                else:
+                    print("No se encontró el data-sitekey en el widget.")
+            except Exception as e:
+                print(f"Ocurrió un error con ReCaptcha: {e}")
+                
+            # 3. Clic en Entrar
+            print("Haciendo clic en Entrar...")
+            # El botón no tiene ID fácil, lo ubicamos por el span que dice 'Entrar'
+            continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[text()='Entrar']]")))
+            continue_btn.click()
             
-        # 3. Clic en Entrar
-        print("Haciendo clic en Entrar...")
-        # El botón no tiene ID fácil, lo ubicamos por el span que dice 'Entrar'
-        continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[text()='Entrar']]")))
-        continue_btn.click()
-        
-        # Esperar a que cargue la pantalla de selección de cliente
-        print("\nEsperando la pantalla de selección de cliente...")
-        
-        # El desplegable es un div personalizado de Material-UI. Lo buscamos a través de su input oculto.
-        dropdown_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@name='cliente']/preceding-sibling::div[@role='button']")))
-        print("Abriendo el menú desplegable...")
-        dropdown_btn.click()
-        
-        # Esperar a que se despliegue la lista flotante
-        time.sleep(1)
-        
-        # Localizar todas las opciones (li con role='option')
-        opciones = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
-        
-        if opciones:
-            print(f"Se encontraron {len(opciones)} clientes. Seleccionando el primero...")
-            opciones[0].click()
-            time.sleep(1) # Pausa para que se registre la selección
+            # Esperar a que cargue la pantalla de selección de cliente
+            print("\nEsperando la pantalla de selección de cliente...")
             
-            # Clic en el botón Continuar
-            print("Haciendo clic en 'Continuar'...")
-            btn_continuar = driver.find_element(By.XPATH, "//button[span[contains(text(), 'Continuar')]]")
-            btn_continuar.click()
+            # El desplegable es un div personalizado de Material-UI. Lo buscamos a través de su input oculto.
+            dropdown_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@name='cliente']/preceding-sibling::div[@role='button']")))
+            print("Abriendo el menú desplegable...")
+            dropdown_btn.click()
             
-            print("\n¡Bienvenido al panel principal de Pase!")
-            
-            # --- 5. Descarga de Reportes ---
-            print("\nIniciando descarga de reportes de consumo...")
-            
-            # El XPath asegura buscar el botón de CSV específicamente en la tarjeta de "DET. CRUCES (NUEVO)"
-            xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
-            
-            # Al entrar, el sistema carga automáticamente el corte más reciente (índice 0)
-            print("Esperando botón de descarga del corte actual (Mes más reciente)...")
-            btn_csv_actual = wait.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
-            print("Descargando archivo CSV del corte actual...")
-            btn_csv_actual.click()
-            time.sleep(5) # Dar tiempo para que el navegador intercepte e inicie la descarga
-            
-            # Ahora seleccionamos el corte anterior (índice 1) para tener el mes completo
-            print("\nBuscando el menú desplegable de 'Periodo'...")
-            periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
-            periodo_dropdown.click()
+            # Esperar a que se despliegue la lista flotante
             time.sleep(1.5)
             
-            # Localizar las opciones del periodo que flotan en pantalla
-            opciones_periodo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
-            if len(opciones_periodo) >= 2:
-                print("Seleccionando el corte del mes anterior cerrado...")
-                opciones_periodo[1].click()
-                
-                print("Esperando a que la página actualice la información del nuevo periodo...")
-                time.sleep(6) # Pausa para que la página haga el Request y actualice los botones de descarga
-                
-                # Volver a ubicar el botón porque la página reconstruyó los elementos (DOM)
-                btn_csv_anterior = wait.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
-                print("Descargando archivo CSV del corte anterior...")
-                btn_csv_anterior.click()
-                
-                print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
-                time.sleep(15)
-            else:
-                print("No hay suficientes periodos en el historial para descargar uno anterior.")
-                
-            print("✅ ¡Proceso de PASE completado exitosamente!")
+            # Localizar todas las opciones (li con role='option')
+            opciones = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+            num_clientes = len(opciones)
             
-        else:
-            print("No se encontraron clientes en el menú desplegable.")
-        
+            if num_clientes > 0 and indice_actual < num_clientes:
+                nombre_cliente = opciones[indice_actual].text.replace('\n', ' - ')
+                print(f"Seleccionando la empresa: {nombre_cliente}")
+                opciones[indice_actual].click()
+                time.sleep(1) # Pausa para que se registre la selección
+                
+                # Clic en el botón Continuar
+                print("Haciendo clic en 'Continuar'...")
+                btn_continuar = driver.find_element(By.XPATH, "//button[span[contains(text(), 'Continuar')]]")
+                btn_continuar.click()
+                
+                print(f"\n¡Bienvenido al panel principal de {nombre_cliente}!")
+                
+                # --- 5. Descarga de Reportes ---
+                print("\nIniciando descarga de reportes de consumo...")
+                
+                # El XPath asegura buscar el botón de CSV específicamente en la tarjeta de "DET. CRUCES (NUEVO)"
+                xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
+                
+                # Al entrar, el sistema carga automáticamente el corte más reciente (índice 0)
+                print("Esperando botón de descarga del corte actual (Mes más reciente)...")
+                try:
+                    # Usamos un wait más corto (5s) para no perder tiempo si la empresa no tiene datos
+                    wait_corto = WebDriverWait(driver, 5)
+                    btn_csv_actual = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                    
+                    print("Descargando archivo CSV del corte actual...")
+                    btn_csv_actual.click()
+                    time.sleep(5) # Dar tiempo para que el navegador intercepte e inicie la descarga
+                    # Revisamos si es un mes natural leyendo el texto del periodo
+                    periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
+                    texto_periodo = periodo_dropdown.text
+                    print(f"Periodo detectado: {texto_periodo}")
+                    
+                    # Verificamos si empieza el día 01 (ej. "DEL 01 AL 31...")
+                    match_mes_completo = re.search(r"DEL\s+01\b", texto_periodo, re.IGNORECASE)
+                    
+                    if match_mes_completo:
+                        print("✅ Es un mes calendario completo. No se necesita descargar el corte anterior.")
+                        print("Esperando 5 segundos adicionales para la descarga...")
+                        time.sleep(5)
+                    else:
+                        # Ahora seleccionamos el corte anterior (índice 1) para tener el mes completo
+                        print("\nCiclo desfasado detectado. Abriendo el menú desplegable para el corte anterior...")
+                        periodo_dropdown.click()
+                        time.sleep(1.5)
+                        
+                        # Localizar las opciones del periodo que flotan en pantalla
+                        opciones_periodo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+                        if len(opciones_periodo) >= 2:
+                            print("Seleccionando el corte del mes anterior cerrado...")
+                            opciones_periodo[1].click()
+                            
+                            print("Esperando a que la página actualice la información del nuevo periodo...")
+                            time.sleep(6) # Pausa para que la página haga el Request y actualice los botones de descarga
+                            
+                            # Volver a ubicar el botón porque la página reconstruyó los elementos (DOM)
+                            btn_csv_anterior = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                            print("Descargando archivo CSV del corte anterior...")
+                            btn_csv_anterior.click()
+                            
+                            print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
+                            time.sleep(15)
+                        else:
+                            print("No hay suficientes periodos en el historial para descargar uno anterior.")
+                        
+                    print("✅ Descargas completadas para esta empresa.")
+                except Exception as e:
+                    print("⚠️ No se encontraron reportes (o el botón de descarga) para esta empresa. Omitiendo...")
+                
+                # --- 6. Cerrar Sesión ---
+                print("\nCerrando sesión para continuar con la siguiente empresa...")
+                # Clic en los 3 puntitos del menú superior derecho
+                menu_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='More']")))
+                menu_btn.click()
+                time.sleep(1)
+                
+                # Clic en Cerrar Sesión
+                logout_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Cerrar Sesión')]")))
+                logout_btn.click()
+                time.sleep(1)
+                
+                print("Confirmando el cierre de sesión en la ventana emergente...")
+                confirmar_logout_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[translate(text(), 'ACEPTAR', 'aceptar')='aceptar']]")))
+                confirmar_logout_btn.click()
+                
+                print("Esperando volver a la pantalla de inicio de sesión...")
+                wait.until(EC.url_contains("apps.pase.com.mx/uc"))
+                time.sleep(3)
+                
+            else:
+                print("No se encontraron clientes o se alcanzó el límite.")
+            
+            indice_actual += 1
+            
     except Exception as e:
         print(f"Ocurrió un error en el flujo: {type(e).__name__} - {e}")
     finally:
