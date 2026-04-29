@@ -4,3 +4,4 @@ venv/
 __pycache__/
 *.pyc
 chrome_profile/
+edenred_profile/
