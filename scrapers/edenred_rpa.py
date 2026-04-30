@@ -55,7 +55,7 @@ def main():
     driver = webdriver.Chrome(service=service, options=chrome_options)
     wait = WebDriverWait(driver, 15)
     
-    url = "https://sso.edenred.com.mx/SSOV280/Account/LogOn?ReturnUrl=%2fssov280"
+    url = os.getenv('EDENRED_URL')
     
     try:
         print(f"Navegando a: {url}")
@@ -239,7 +239,7 @@ def main():
                 time.sleep(2)
 
                 # 16. Escribir destinatario y enviar
-                email_destino = os.getenv('DESTINATARIO_EMAIL', 'correo@ejemplo.com')
+                email_destino = os.getenv('DESTINATARIO_EMAIL')
                 print(f"Enviando reporte al correo: {email_destino}")
 
                 txt_correo = wait.until(EC.presence_of_element_located((By.ID, "ctl00_contenido_ucListadoReportes_cpDestinatarios_txtWriteMail")))
@@ -278,3 +278,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    from extractors import edenred_extractor
+    edenred_extractor.main()

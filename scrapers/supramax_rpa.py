@@ -22,11 +22,24 @@ def process_account(username, password):
     # Descomentar para modo silencioso (headless) una vez que esté terminado y probado
     # chrome_options.add_argument("--headless") 
     
+    # Forzar descargas a una carpeta controlada para poder leer el archivo
+    descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
+    if not os.path.exists(descargas_dir):
+        os.makedirs(descargas_dir)
+        
+    prefs = {
+        "download.default_directory": descargas_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
+    
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     wait = WebDriverWait(driver, 15)
     
-    url = "https://es09326.migasolinera.net/emaxclie/"
+    url = os.getenv('SUPRAMAX_URL')
     
     try:
         print(f"Navegando a: {url}")
@@ -126,8 +139,37 @@ def process_account(username, password):
             descargar_xls_btn.click()
             
             # 11. Esperar a que la descarga se inicie/complete
-            print("\nDescarga iniciada. Esperando 15 segundos para asegurar que el archivo se termine de descargar...")
-            time.sleep(15)
+            print("\nDescarga iniciada. Esperando a que aterrice en la carpeta de descargas temporales...")
+            
+            tiempo_espera = 0
+            archivo_descargado = None
+            while tiempo_espera < 45: # Esperamos hasta 45 segundos por si el archivo es pesado
+                archivos = os.listdir(descargas_dir)
+                archivos_xls = [f for f in archivos if f.endswith('.xls')]
+                archivos_temp = [f for f in archivos if f.endswith('.crdownload') or f.endswith('.tmp')]
+                
+                if archivos_xls and not archivos_temp:
+                    archivo_descargado = os.path.join(descargas_dir, archivos_xls[0])
+                    break
+                time.sleep(1)
+                tiempo_espera += 1
+                
+            if archivo_descargado:
+                print(f"✅ Archivo detectado: {archivo_descargado}")
+                print("🚀 Mandando a la aduana de BigQuery...")
+                from bigquery import bq_ingestion
+                try:
+                    df_limpio = bq_ingestion.procesar_supramax(archivo_descargado)
+                    # Opcional: si la función te devuelve None porque falló, detenemos
+                    if df_limpio is not None:
+                        bq_ingestion.ingest_to_bigquery(df_limpio)
+                except Exception as e:
+                    print(f"❌ Error durante la limpieza o ingesta a BQ: {e}")
+                finally:
+                    # Siempre limpiamos la carpeta para que la siguiente empresa inicie con la carpeta vacía
+                    os.remove(archivo_descargado)
+            else:
+                print("⚠️ Tiempo de espera agotado. No se detectó el archivo en la carpeta.")
         
         # Clic en SALIR
         print("Cerrando sesión (Clic en SALIR)...")

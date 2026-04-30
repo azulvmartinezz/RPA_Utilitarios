@@ -46,6 +46,19 @@ def main():
     # Configuración Anti-Detección usando undetected_chromedriver
     chrome_options = uc.ChromeOptions()
     
+    # Forzar descargas a una carpeta controlada para poder leer los archivos
+    descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
+    if not os.path.exists(descargas_dir):
+        os.makedirs(descargas_dir)
+        
+    prefs = {
+        "download.default_directory": descargas_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
+    
     # Crear una carpeta local para guardar las cookies y el historial (Perfil Persistente)
     profile_path = os.path.join(os.getcwd(), "chrome_profile")
     
@@ -53,9 +66,9 @@ def main():
     # Fijamos la versión 147 para que coincida con tu navegador instalado
     driver = uc.Chrome(options=chrome_options, user_data_dir=profile_path, version_main=147)
     
-    wait = WebDriverWait(driver, 15)
+    wait = WebDriverWait(driver, 30)
     
-    url = "https://apps.pase.com.mx/uc/"
+    url = os.getenv('PASE_URL')
     
     try:
         indice_actual = 0
@@ -68,7 +81,7 @@ def main():
             
             print(f"Navegando a: {url}")
             driver.get(url)
-            time.sleep(5)
+            time.sleep(8)
             
             # --- Lógica Anti-WAF (Radware) ---
             if "validate.perfdrive.com" in driver.current_url:
@@ -139,7 +152,7 @@ def main():
             # El desplegable es un div personalizado de Material-UI. Lo buscamos a través de su input oculto.
             dropdown_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@name='cliente']/preceding-sibling::div[@role='button']")))
             print("Abriendo el menú desplegable...")
-            dropdown_btn.click()
+            driver.execute_script("arguments[0].click();", dropdown_btn)
             
             # Esperar a que se despliegue la lista flotante
             time.sleep(1.5)
@@ -151,7 +164,7 @@ def main():
             if num_clientes > 0 and indice_actual < num_clientes:
                 nombre_cliente = opciones[indice_actual].text.replace('\n', ' - ')
                 print(f"Seleccionando la empresa: {nombre_cliente}")
-                opciones[indice_actual].click()
+                driver.execute_script("arguments[0].click();", opciones[indice_actual])
                 time.sleep(1) # Pausa para que se registre la selección
                 
                 # Clic en el botón Continuar
@@ -215,6 +228,29 @@ def main():
                             print("No hay suficientes periodos en el historial para descargar uno anterior.")
                         
                     print("✅ Descargas completadas para esta empresa.")
+                    
+                    # === INGESTA A BIGQUERY ===
+                    from bigquery import bq_ingestion
+                    
+                    # Esperar extra para descargas rezagadas
+                    time.sleep(3)
+                    archivos = os.listdir(descargas_dir)
+                    archivos_csv = [os.path.join(descargas_dir, f) for f in archivos if f.endswith('.csv')]
+                    
+                    if archivos_csv:
+                        print(f"🚀 Se encontraron {len(archivos_csv)} archivo(s) CSV. Mandando a la aduana de BigQuery...")
+                        for archivo in archivos_csv:
+                            try:
+                                df_limpio = bq_ingestion.procesar_pase(archivo)
+                                if df_limpio is not None:
+                                    bq_ingestion.ingest_to_bigquery(df_limpio)
+                            except Exception as e:
+                                print(f"❌ Error durante la ingesta a BQ de {archivo}: {e}")
+                            finally:
+                                os.remove(archivo) # Limpiar carpeta
+                    else:
+                        print("⚠️ No se encontraron archivos CSV en la carpeta temporal.")
+                        
                 except Exception as e:
                     print("⚠️ No se encontraron reportes (o el botón de descarga) para esta empresa. Omitiendo...")
                 

@@ -1,7 +1,41 @@
+# Entorno
 .env
+.env.*
 .venv/
 venv/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+
+# Tokens y credenciales
+o365_token.txt
+*.token
+*.token.txt
+*_token.json
+credentials.json
+token.json
+service_account*.json
+*.p12
+*.pem
+*.key
+
+# Archivos temporales del flujo OAuth
+url.txt
+
+# Perfiles de navegador (pueden contener sesiones/cookies)
 chrome_profile/
 edenred_profile/
+
+# Descargas temporales y reportes de datos
+descargas_temporales/
+*.xlsx
+*.xls
+*.csv
+
+# BigQuery / GCP
+.gcp/
+gcloud/
+application_default_credentials.json
+
