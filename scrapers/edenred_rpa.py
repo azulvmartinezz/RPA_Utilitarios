@@ -272,11 +272,15 @@ def main():
         time.sleep(5)
     except Exception as e:
         print(f"Ocurrió un error en el flujo: {e}")
+        return 0
     finally:
         print("Cerrando el navegador...")
-        driver.quit()
+        if 'driver' in locals():
+            driver.quit()
+    
+    return len(empresas)
 
 if __name__ == "__main__":
-    main()
+    n_empresas = main()
     from extractors import edenred_extractor
-    edenred_extractor.main()
+    edenred_extractor.main(n_expected=n_empresas)

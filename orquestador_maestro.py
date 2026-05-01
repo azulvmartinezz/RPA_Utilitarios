@@ -1,43 +1,57 @@
+import threading
 import time
 from scrapers import edenred_rpa, supramax_rpa, pase_rpa
 from extractors import edenred_extractor
 
-def main():
-    print("="*50)
-    print("🚀 INICIANDO ORQUESTADOR MAESTRO DE RPA 🚀")
-    print("="*50)
-
-    # PASO 1: Edenred — solicita los reportes por correo
-    print("\n[1/4] Solicitando reportes de Edenred...")
+def flujo_edenred():
+    print("\n💎 [EDENRED] Iniciando flujo (Solicitud + Extracción)...")
     try:
-        edenred_rpa.main()
+        # Primero solicita los reportes
+        n_edenred = edenred_rpa.main()
+        # Luego procesa los correos que lleguen
+        edenred_extractor.main(n_expected=n_edenred)
     except Exception as e:
-        print(f"❌ Error crítico en Edenred RPA: {e}")
+        print(f"❌ Error crítico en flujo Edenred: {e}")
 
-    # PASO 2: Edenred extractor — polling hasta que lleguen los correos e ingesta a BQ
-    print("\n[2/4] Esperando y extrayendo correos de Edenred hacia BigQuery...")
-    try:
-        edenred_extractor.main()
-    except Exception as e:
-        print(f"❌ Error extrayendo correos de Edenred: {e}")
-
-    # PASO 3: Supramax
-    print("\n[3/4] Descargando e ingiriendo Supramax a BigQuery...")
+def flujo_supramax():
+    print("\n📈 [SUPRAMAX] Iniciando descarga e ingesta directa...")
     try:
         supramax_rpa.main()
     except Exception as e:
-        print(f"❌ Error crítico en Supramax RPA: {e}")
+        print(f"❌ Error crítico en flujo Supramax: {e}")
 
-    # PASO 4: Pase
-    print("\n[4/4] Descargando e ingiriendo Pase a BigQuery...")
+def flujo_pase():
+    print("\n🎫 [PASE] Iniciando descarga e ingesta directa...")
     try:
         pase_rpa.main()
     except Exception as e:
-        print(f"❌ Error crítico en Pase RPA: {e}")
+        print(f"❌ Error crítico en flujo Pase: {e}")
 
-    print("\n" + "="*50)
-    print("✅ FLUJO MAESTRO COMPLETADO EXITOSAMENTE ✅")
-    print("="*50)
+def main():
+    start_time = time.time()
+    print("="*60)
+    print("🚀 INICIANDO ORQUESTADOR MAESTRO TURBO (PARALELO) 🚀")
+    print("="*60)
+
+    # Definimos los hilos
+    hilos = [
+        threading.Thread(target=flujo_edenred, name="Hilo-Edenred"),
+        threading.Thread(target=flujo_supramax, name="Hilo-Supramax"),
+        threading.Thread(target=flujo_pase, name="Hilo-Pase")
+    ]
+
+    # Arrancamos todos los motores
+    for hilo in hilos:
+        hilo.start()
+
+    # Esperamos a que todos terminen
+    for hilo in hilos:
+        hilo.join()
+
+    total_minutos = (time.time() - start_time) / 60
+    print("\n" + "="*60)
+    print(f"✅ PROCESO GLOBAL FINALIZADO EN {total_minutos:.2f} MINUTOS")
+    print("="*60)
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,7 @@ CLIENT_SECRET = os.getenv('GRAPH_CLIENT_SECRET')
 TENANT_ID = os.getenv('GRAPH_TENANT_ID')
 EMAIL_CUENTA = os.getenv('DESTINATARIO_EMAIL')
 
-def main():
+def main(n_expected=1):
     if not CLIENT_ID or not CLIENT_SECRET or not TENANT_ID:
         print("❌ Faltan credenciales de Graph API en el archivo .env")
         return
@@ -68,17 +68,23 @@ def main():
         print(f"\nBuscando reportes nuevos (Sin Leer) en el buzón de {EMAIL_CUENTA}...")
         candidatos = list(mailbox.get_messages(limit=25, query=query))
         mensajes = [m for m in candidatos if m.has_attachments]
-        if mensajes:
-            print(f"✅ Se encontraron {len(mensajes)} correo(s) con adjuntos.")
+        
+        if len(mensajes) >= n_expected:
+            print(f"✅ Se encontraron {len(mensajes)} correo(s) con adjuntos (esperábamos {n_expected}).")
             break
-        print(f"⏳ Sin correos nuevos. Reintentando en {intervalo}s... ({transcurrido//60}m transcurridos)")
+            
+        print(f"⏳ Se encontraron {len(mensajes)}/{n_expected} correos. Reintentando en {intervalo}s... ({transcurrido//60}m transcurridos)")
         time.sleep(intervalo)
         transcurrido += intervalo
     else:
-        print("⏰ Tiempo de espera agotado. No llegaron correos de Edenred.")
-        return
+        if not mensajes:
+            print("⏰ Tiempo de espera agotado. No llegaron correos de Edenred.")
+            return
+        else:
+            print(f"⚠️ Tiempo de espera agotado, pero se procesarán los {len(mensajes)} correos encontrados.")
 
     encontrados = 0
+    total_importe = 0.0
     for mensaje in mensajes:
         if mensaje.has_attachments:
             print(f"\n✉️  Correo detectado: '{mensaje.subject}' (Recibido: {mensaje.received})")
@@ -96,14 +102,18 @@ def main():
                     ruta_guardado = os.path.join(descargas_dir, adjunto.name)
                     print(f"📥 Descargando adjunto: {adjunto.name} ...")
                     adjunto.save(location=descargas_dir)
-                    mensaje.mark_as_read()
-
+                    
                     print("🚀 Mandando a la aduana de BigQuery...")
                     try:
                         df_limpio = bq_ingestion.procesar_edenred(ruta_guardado)
                         if df_limpio is not None:
+                            suma_archivo = df_limpio['Importe'].sum()
+                            total_importe += suma_archivo
                             bq_ingestion.ingest_to_bigquery(df_limpio)
-                        print("✅ Correo procesado y marcado como leído.")
+                            print(f"✅ Subtotal de este archivo: {suma_archivo:,.2f}")
+                            # Solo marcar como leído si se procesó bien
+                            mensaje.mark_as_read()
+                        print("✅ Correo procesado.")
                     except Exception as e:
                         print(f"❌ Error al procesar a BigQuery: {e}")
                     finally:
@@ -115,6 +125,10 @@ def main():
 
     if encontrados == 0:
         print("No se encontraron correos nuevos con reportes.")
+    else:
+        print(f"\n{'='*50}")
+        print(f"💰 RESUMEN EDENRED: {total_importe:,.2f} procesados.")
+        print(f"{'='*50}")
 
 if __name__ == "__main__":
     main()
