@@ -1,5 +1,10 @@
 import os
+import sys
 import time
+
+# Añadir el directorio raíz al path para que encuentre 'bigquery' y otros módulos
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from dotenv import load_dotenv
 from O365 import Account, FileSystemTokenBackend
 from bigquery import bq_ingestion
@@ -7,12 +12,11 @@ from bigquery import bq_ingestion
 load_dotenv()
 
 CLIENT_ID = os.getenv('GRAPH_CLIENT_ID')
-CLIENT_SECRET = os.getenv('GRAPH_CLIENT_SECRET')
 TENANT_ID = os.getenv('GRAPH_TENANT_ID')
 EMAIL_CUENTA = os.getenv('DESTINATARIO_EMAIL')
 
 def main(n_expected=1):
-    if not CLIENT_ID or not CLIENT_SECRET or not TENANT_ID:
+    if not CLIENT_ID or not TENANT_ID:
         print("❌ Faltan credenciales de Graph API en el archivo .env")
         return
 
@@ -57,6 +61,7 @@ def main(n_expected=1):
 
     mailbox = account.mailbox()
     query = mailbox.new_query().on_attribute('isRead').equals(False)
+    query.chain('and').on_attribute('subject').contains('Reportes Edenred')
 
     # Polling: reintenta cada 30s hasta 15 minutos esperando que lleguen los correos
     timeout = 15 * 60
@@ -66,8 +71,15 @@ def main(n_expected=1):
 
     while transcurrido <= timeout:
         print(f"\nBuscando reportes nuevos (Sin Leer) en el buzón de {EMAIL_CUENTA}...")
-        candidatos = list(mailbox.get_messages(limit=25, query=query))
-        mensajes = [m for m in candidatos if m.has_attachments]
+        candidatos = list(mailbox.get_messages(limit=100, query=query))
+        mensajes = sorted(
+            [m for m in candidatos if m.has_attachments],
+            key=lambda m: m.received,
+            reverse=True,
+        )
+        if n_expected and len(mensajes) > n_expected:
+            print(f"ℹ️ Hay {len(mensajes)} correos sin leer; se procesarán solo los {n_expected} más recientes.")
+            mensajes = mensajes[:n_expected]
         
         if len(mensajes) >= n_expected:
             print(f"✅ Se encontraron {len(mensajes)} correo(s) con adjuntos (esperábamos {n_expected}).")
@@ -117,9 +129,16 @@ def main(n_expected=1):
                     except Exception as e:
                         print(f"❌ Error al procesar a BigQuery: {e}")
                     finally:
-                        # Limpiar el archivo descargado
+                        # Respaldar el archivo en lugar de borrarlo
                         if os.path.exists(ruta_guardado):
-                            os.remove(ruta_guardado)
+                            respaldo_dir = os.path.join(os.getcwd(), "respaldo_descargas")
+                            respaldo_dir = os.path.join(os.getcwd(), "respaldo_descargas")
+                            import sys
+                            raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                            if raiz_proyecto not in sys.path:
+                                sys.path.append(raiz_proyecto)
+                            import gcs_uploader
+                            gcs_uploader.subir_y_borrar_local(ruta_guardado, 'Edenred')
             
             encontrados += 1
 

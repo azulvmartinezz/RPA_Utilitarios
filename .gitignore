@@ -1,6 +1,8 @@
 # Entorno
+.DS_Store
 .env
 .env.*
+!.env.example
 .venv/
 venv/
 
@@ -30,12 +32,27 @@ edenred_profile/
 
 # Descargas temporales y reportes de datos
 descargas_temporales/
+respaldo_descargas/
 *.xlsx
 *.xls
+*.xlsm
+*.xlm
 *.csv
+*.pdf
+
+# Logs y resultados
+logs_backfill/
+*.log
+REPORTE_CONCILIACION_*.xlsx
+RESULTADO_CONCILIACION.xlsx
+Sistema_vs_Consolidado.xlsx
+
+# Scripts/resultados exploratorios con datos hardcodeados
+Conciliador Claude/
+verificar_faltantes.py
 
 # BigQuery / GCP
 .gcp/
 gcloud/
 application_default_credentials.json
-
+*.json

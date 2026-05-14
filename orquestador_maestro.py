@@ -30,23 +30,15 @@ def flujo_pase():
 def main():
     start_time = time.time()
     print("="*60)
-    print("🚀 INICIANDO ORQUESTADOR MAESTRO TURBO (PARALELO) 🚀")
+    print("🚀 INICIANDO ORQUESTADOR MAESTRO (SECUENCIAL) 🚀")
     print("="*60)
 
-    # Definimos los hilos
-    hilos = [
-        threading.Thread(target=flujo_edenred, name="Hilo-Edenred"),
-        threading.Thread(target=flujo_supramax, name="Hilo-Supramax"),
-        threading.Thread(target=flujo_pase, name="Hilo-Pase")
-    ]
-
-    # Arrancamos todos los motores
-    for hilo in hilos:
-        hilo.start()
-
-    # Esperamos a que todos terminen
-    for hilo in hilos:
-        hilo.join()
+    # Ejecutamos secuencialmente para evitar que Chrome/Selenium
+    # choquen al intentar abrir múltiples navegadores en Mac.
+    
+    flujo_pase()
+    flujo_supramax()
+    flujo_edenred()
 
     total_minutos = (time.time() - start_time) / 60
     print("\n" + "="*60)

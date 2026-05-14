@@ -10,23 +10,58 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
+
+import sys
+raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if raiz_proyecto not in sys.path:
+    sys.path.insert(0, raiz_proyecto)
+import gcs_uploader
 
 # Cargar variables de entorno
 load_dotenv()
 
-def process_account(username, password):
-    print(f"\n--- Iniciando proceso para la cuenta: {username} ---")
-    
+
+def _click_js(driver, wait, locator, descripcion, timeout=20):
+    element = WebDriverWait(driver, timeout).until(EC.presence_of_element_located(locator))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    time.sleep(0.3)
+    WebDriverWait(driver, timeout).until(EC.element_to_be_clickable(locator))
+    driver.execute_script("arguments[0].click();", element)
+    print(f"  -> Click: {descripcion}")
+    return element
+
+
+def _guardar_diagnostico(driver, descargas_dir, username, etapa):
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    usuario_seguro = "".join(c for c in str(username) if c.isalnum() or c in ("-", "_"))[:30] or "cuenta"
+    base = os.path.join(descargas_dir, f"supramax_{etapa}_{usuario_seguro}_{timestamp}")
+    try:
+        driver.save_screenshot(f"{base}.png")
+        with open(f"{base}.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        print(f"📸 Diagnóstico guardado: {os.path.basename(base)}")
+    except Exception as e:
+        print(f"⚠️ No se pudo guardar diagnóstico ({e})")
+
+
+def process_account(username, password, fini_override=None, ffin_override=None, meses_override=None, meses_meta=None):
+    print(f"\n--- Iniciando proceso para cuenta Supramax: {username} ---")
+
     chrome_options = Options()
-    # Descomentar para modo silencioso (headless) una vez que esté terminado y probado
-    # chrome_options.add_argument("--headless") 
-    
-    # Forzar descargas a una carpeta controlada para poder leer el archivo
+    # chrome_options.add_argument("--headless")
+
     descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
     if not os.path.exists(descargas_dir):
         os.makedirs(descargas_dir)
-        
+    else:
+        # Limpieza inicial para evitar archivos huérfanos
+        for f in os.listdir(descargas_dir):
+            if f.endswith('.xls') or f.endswith('.crdownload') or f.endswith('.tmp'):
+                try: os.remove(os.path.join(descargas_dir, f))
+                except: pass
+
     prefs = {
         "download.default_directory": descargas_dir,
         "download.prompt_for_download": False,
@@ -34,162 +69,183 @@ def process_account(username, password):
         "safebrowsing.enabled": True
     }
     chrome_options.add_experimental_option("prefs", prefs)
-    
-    service = Service(ChromeDriverManager().install())
+
+    import sys
+    if not hasattr(sys, '_chromedriver_path'):
+        sys._chromedriver_path = ChromeDriverManager().install()
+    service = Service(sys._chromedriver_path)
     driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver.set_page_load_timeout(300)   # 5 min para cuentas con reportes pesados
+    driver.set_script_timeout(300)
     wait = WebDriverWait(driver, 15)
-    
+    long_wait = WebDriverWait(driver, 300)
+
     url = os.getenv('SUPRAMAX_URL')
-    
-    try:
-        print(f"Navegando a: {url}")
-        driver.get(url)
-        
-        # 1. Esperar bloque de inicio de sesión
-        print("Esperando elementos de inicio de sesión...")
-        
-        # 2. Llenar usuario y contraseña
-        print("Ingresando credenciales...")
-        user_input = wait.until(EC.presence_of_element_located((By.ID, "username")))
-        user_input.clear()
-        user_input.send_keys(username)
-        
-        pwd_input = driver.find_element(By.ID, "password")
-        pwd_input.clear()
-        pwd_input.send_keys(password)
-        
-        # 3. Hacer clic en Entrar
-        print("Haciendo clic en Entrar...")
-        login_btn = driver.find_element(By.ID, "login")
-        login_btn.click()
-        
-        # 4. Navegar a la pestaña 'Reportes'
-        print("\nEsperando a que cargue la pantalla principal...")
-        reportes_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[@title='Reportes']")))
-        print("Haciendo clic en 'Reportes'...")
-        reportes_btn.click()
-        
-        # 5. Clic en 'Reporte de consumos'
-        print("Esperando la lista de reportes...")
-        reporte_consumos_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[@title='Reporte de consumos']")))
-        print("Haciendo clic en 'Reporte de consumos'...")
-        reporte_consumos_btn.click()
-        
-        # 6. Calcular fechas del mes anterior
+
+    # Determinar la lista de (fini, ffin) a descargar en esta sesión
+    if meses_override:
+        meses = meses_override
+    elif fini_override and ffin_override:
+        meses = [(fini_override, ffin_override)]
+    else:
         today = datetime.date.today()
         first_day_this_month = today.replace(day=1)
         last_day_prev_month = first_day_this_month - datetime.timedelta(days=1)
         first_day_prev_month = last_day_prev_month.replace(day=1)
+        meses = [(first_day_prev_month.strftime("%d/%m/%Y"),
+                  last_day_prev_month.strftime("%d/%m/%Y"))]
+
+    fallos = []  # meses que no se pudieron procesar
+
+    try:
+        driver.get(url)
+
+        # Login Robusto
+        print("Ingresando credenciales...")
+        user_input = wait.until(EC.element_to_be_clickable((By.ID, "username")))
+        user_input.click()
+        user_input.clear()
+        time.sleep(0.5)
+        user_input.send_keys(username)
         
-        fini_str = first_day_prev_month.strftime("%d/%m/%Y")
-        ffin_str = last_day_prev_month.strftime("%d/%m/%Y")
+        pwd_input = wait.until(EC.element_to_be_clickable((By.ID, "password")))
+        pwd_input.click()
+        pwd_input.clear()
+        time.sleep(0.5)
+        pwd_input.send_keys(password)
         
-        print(f"\nConfigurando fechas del mes anterior: {fini_str} al {ffin_str}")
-        
-        # 7. Inyectar las fechas y disparar eventos para que la página registre el cambio
-        # Esperamos a que los campos existan en el DOM
-        wait.until(EC.presence_of_element_located((By.ID, "fini")))
-        
-        js_code = """
-        var e_fini = document.getElementById('fini');
-        e_fini.value = arguments[0];
-        e_fini.dispatchEvent(new Event('input', { bubbles: true }));
-        e_fini.dispatchEvent(new Event('change', { bubbles: true }));
-        e_fini.dispatchEvent(new Event('blur', { bubbles: true }));
-        
-        var e_ffin = document.getElementById('ffin');
-        e_ffin.value = arguments[1];
-        e_ffin.dispatchEvent(new Event('input', { bubbles: true }));
-        e_ffin.dispatchEvent(new Event('change', { bubbles: true }));
-        e_ffin.dispatchEvent(new Event('blur', { bubbles: true }));
-        """
-        driver.execute_script(js_code, fini_str, ffin_str)
-        time.sleep(1) # Pausa para que el JS de la página asimile el cambio
-        
-        print("Fechas configuradas exitosamente.")
-        
-        # 8. Hacer clic en Procesar
-        print("\nHaciendo clic en 'Procesar'...")
-        procesar_btn = driver.find_element(By.ID, "btn_submit")
-        procesar_btn.click()
-        
-        # 9. Clic en 'Detalles por Venta Unitaria'
-        print("\nEsperando a que cargue el resumen del reporte (puede demorar en procesar la base de datos)...")
-        long_wait = WebDriverWait(driver, 120) # Aumentamos la espera a 2 minutos
-        
-        # Esperar a que aparezca el botón de Detalles O el texto de "No se encontraron registros"
-        long_wait.until(
-            lambda d: d.find_elements(By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]") or 
-                      d.find_elements(By.XPATH, "//td[contains(text(), 'No se encontraron registros')]")
-        )
-        
-        # Verificar qué apareció en pantalla
-        if driver.find_elements(By.XPATH, "//td[contains(text(), 'No se encontraron registros')]"):
-            print("⚠️ No se encontraron registros de consumo para este periodo. Saltando descarga...")
-        else:
-            detalles_btn = driver.find_element(By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]")
-            print("Haciendo clic en 'Detalles por Venta Unitaria'...")
-            detalles_btn.click()
-            
-            # 10. Descargar XLS de 'Todos los consumos'
-            print("\nEsperando a que cargue la tabla detallada de consumos...")
-            # Usamos un XPath que busque el input de imagen dentro de la fila que dice 'Todos los consumos.'
-            descargar_xls_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//tr[td[contains(normalize-space(text()), 'Todos los consumos.')]]//input[@type='image']")))
-            print("Haciendo clic en el botón de Excel de 'Todos los consumos'...")
-            descargar_xls_btn.click()
-            
-            # 11. Esperar a que la descarga se inicie/complete
-            print("\nDescarga iniciada. Esperando a que aterrice en la carpeta de descargas temporales...")
-            
-            tiempo_espera = 0
-            archivo_descargado = None
-            while tiempo_espera < 45: # Esperamos hasta 45 segundos por si el archivo es pesado
-                archivos = os.listdir(descargas_dir)
-                archivos_xls = [f for f in archivos if f.endswith('.xls')]
-                archivos_temp = [f for f in archivos if f.endswith('.crdownload') or f.endswith('.tmp')]
-                
-                if archivos_xls and not archivos_temp:
-                    archivo_descargado = os.path.join(descargas_dir, archivos_xls[0])
-                    break
-                time.sleep(1)
-                tiempo_espera += 1
-                
-            if archivo_descargado:
-                print(f"✅ Archivo detectado: {archivo_descargado}")
-                print("🚀 Mandando a la aduana de BigQuery...")
-                from bigquery import bq_ingestion
-                try:
-                    df_limpio = bq_ingestion.procesar_supramax(archivo_descargado)
-                    # Opcional: si la función te devuelve None porque falló, detenemos
-                    if df_limpio is not None:
-                        bq_ingestion.ingest_to_bigquery(df_limpio)
-                except Exception as e:
-                    print(f"❌ Error durante la limpieza o ingesta a BQ: {e}")
-                finally:
-                    # Siempre limpiamos la carpeta para que la siguiente empresa inicie con la carpeta vacía
-                    os.remove(archivo_descargado)
-            else:
-                print("⚠️ Tiempo de espera agotado. No se detectó el archivo en la carpeta.")
-        
-        # Clic en SALIR
-        print("Cerrando sesión (Clic en SALIR)...")
+        time.sleep(0.5)
+        driver.find_element(By.ID, "login").click()
+
+        # Esperar pantalla principal (busca menú Reportes por title o por texto)
+        REPORTES_XPATH = "//a[@title='Reportes'] | //a[normalize-space(text())='Reportes'] | //input[@value='Reportes']"
         try:
-            # Asegurarnos de volver al frame principal si es que estamos en algún iframe,
-            # aunque de base el botón parece estar en el top (target="_top").
-            driver.switch_to.default_content() 
-            salir_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'SALIR') or contains(@href, 'index.php?lg=1')]")))
-            salir_btn.click()
-            time.sleep(2)
-        except Exception as e:
-            print(f"⚠️ No se pudo hacer clic en SALIR, cerrando el navegador igualmente... ({e})")
+            WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.XPATH, REPORTES_XPATH)))
+        except TimeoutException:
+            print(f"❌ No apareció el menú 'Reportes' después del login. Se omite esta cuenta.")
+            _guardar_diagnostico(driver, descargas_dir, username, "login")
+            return
+
+        for fini, ffin in meses:
+            print(f"\n[Mes {meses.index((fini, ffin))+1}/{len(meses)}] {fini} → {ffin}")
             
-        print(f"✅ Proceso de descarga completado para {username}.")
-        
+            try:
+                # Navegación a reportes
+                wait.until(EC.element_to_be_clickable((By.XPATH, REPORTES_XPATH))).click()
+                wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Reporte de consumos')]"))).click()
+
+                # Inyectar fechas via JS (los campos tienen date-picker y son read-only)
+                wait.until(EC.presence_of_element_located((By.ID, "fini")))
+                driver.execute_script("""
+                    var fi = document.getElementById('fini');
+                    fi.removeAttribute('readonly');
+                    fi.value = arguments[0];
+                    fi.dispatchEvent(new Event('change', {bubbles: true}));
+                    fi.dispatchEvent(new Event('blur', {bubbles: true}));
+                    var ff = document.getElementById('ffin');
+                    ff.removeAttribute('readonly');
+                    ff.value = arguments[1];
+                    ff.dispatchEvent(new Event('change', {bubbles: true}));
+                    ff.dispatchEvent(new Event('blur', {bubbles: true}));
+                """, fini, ffin)
+                time.sleep(0.5)
+
+                _click_js(driver, wait, (By.ID, "btn_submit"), "Procesar")
+
+                # Verificar si hay datos
+                try:
+                    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//td[contains(text(), 'No se encontraron registros')]")))
+                    print("⚠️ Sin registros para este periodo, saltando...")
+                    continue
+                except:
+                    pass
+
+                # Si hay datos, descargar
+                _click_js(driver, wait, (By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]"), "Detalles por Venta Unitaria")
+
+                # Esperar a que cargue la página de detalles y hacer scroll al fondo
+                time.sleep(2)
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(0.5)
+
+                descargar_xls_btn = wait.until(EC.element_to_be_clickable(
+                    (By.XPATH,
+                     "//tr[td[contains(normalize-space(text()), 'Todos los consumos.')]]//input[@type='image']"
+                     " | //a[img[contains(@src,'xls') or contains(@src,'excel')]]"
+                     " | //a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'versión xls')]"
+                     " | //a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'version xls')]"
+                    )))
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", descargar_xls_btn)
+                
+                # Iniciar monitoreo de descarga
+                inicio_descarga = time.time()
+                descargar_xls_btn.click()
+                print("  -> Click: Descargar XLS")
+
+                # Esperar descarga con timeout extendido (180s para cuentas con reportes pesados)
+                tiempo_espera = 0
+                archivo_descargado = None
+                while tiempo_espera < 180:
+                    archivos = os.listdir(descargas_dir)
+                    archivos_xls = [
+                        os.path.join(descargas_dir, f) 
+                        for f in archivos 
+                        if f.endswith('.xls') and os.path.getmtime(os.path.join(descargas_dir, f)) >= (inicio_descarga - 2)
+                    ]
+                    archivos_temp = [f for f in archivos if f.endswith('.crdownload') or f.endswith('.tmp')]
+                    
+                    if archivos_xls and not archivos_temp:
+                        archivo_descargado = max(archivos_xls, key=os.path.getmtime)
+                        break
+                    time.sleep(1)
+                    tiempo_espera += 1
+
+                if archivo_descargado:
+                    print(f"✅ Archivo descargado. Subiendo a BigQuery...")
+                    from bigquery import bq_ingestion
+                    try:
+                        df_limpio = bq_ingestion.procesar_supramax(archivo_descargado)
+                        if df_limpio is not None:
+                            bq_ingestion.ingest_to_bigquery(df_limpio)
+                    except Exception as e:
+                        print(f"❌ Error en ingesta a BQ: {e}")
+                    finally:
+                        gcs_uploader.subir_y_borrar_local(archivo_descargado, 'Supramax')
+                else:
+                    print("⚠️ Tiempo de espera agotado. No se detectó el archivo.")
+
+            except Exception as e:
+                if "invalid session id" in str(e).lower():
+                    print(f"🛑 Sesión de navegador perdida. Abortando meses restantes de {username}.")
+                    raise e
+                print(f"⚠️ Error procesando mes {fini}: {e}")
+                _guardar_diagnostico(driver, descargas_dir, username, "error_mes")
+                # Registrar el fallo con su tupla (year, month)
+                idx = meses.index((fini, ffin))
+                if meses_meta and idx < len(meses_meta):
+                    fallos.append(meses_meta[idx])
+
+        # Cerrar sesión
+        try:
+            driver.switch_to.default_content()
+            wait.until(EC.element_to_be_clickable(
+                (By.XPATH, "//a[contains(text(), 'SALIR') or contains(@href, 'index.php?lg=1')]"))).click()
+            time.sleep(2)
+        except:
+            pass
+
+        print(f"✅ Proceso completado para cuenta {username}.")
+
     except Exception as e:
-        print(f"Ocurrió un error con la cuenta {username}: {e}")
+        print(f"❌ Ocurrió un error crítico en la cuenta {username}: {e}")
+        try: _guardar_diagnostico(driver, descargas_dir, username, "error_critico")
+        except: pass
     finally:
-        print(f"Cerrando sesión/navegador para {username}...")
-        driver.quit()
+        try: driver.quit()
+        except: pass
+
+    return fallos
+
 
 def main():
     print("Iniciando RPA para Supramax...")
@@ -209,7 +265,7 @@ def main():
     # Iterar por cada cuenta
     for idx, acc in enumerate(credenciales):
         print(f"\n{'='*50}")
-        print(f"🔄 PROCESANDO EMPRESA {idx + 1} DE {len(credenciales)}: {acc['Empresa']}")
+        print(f"🔄 PROCESANDO CUENTA {idx + 1} DE {len(credenciales)}")
         print(f"{'='*50}")
         process_account(acc['Usuario'], acc['Contraseña'])
         

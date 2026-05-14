@@ -35,7 +35,7 @@ def solve_recaptcha(sitekey, url):
         print(f"Error resolviendo captcha: {e}")
         return None
 
-def main():
+def main(meses_override=None):
     print("Iniciando RPA para Edenred...")
     
     if not TWOCAPTCHA_API_KEY:
@@ -93,7 +93,10 @@ def main():
                 if token:
                     # 5. Inyectar el token en la página
                     print("Inyectando token en la página...")
-                    driver.execute_script(f"document.getElementById('g-recaptcha-response').innerHTML = '{token}';")
+                    driver.execute_script(
+                        "document.getElementById('g-recaptcha-response').innerHTML = arguments[0];",
+                        token,
+                    )
                     time.sleep(1)
             else:
                 print("No se encontró el data-sitekey en el widget.")
@@ -159,116 +162,114 @@ def main():
 
         hoy = datetime.date.today()
         mes_pasado_str = (hoy.replace(day=1) - datetime.timedelta(days=1)).strftime("%m/%Y")
+        meses = meses_override if meses_override else [mes_pasado_str]
 
+        reportes_enviados = 0
         for idx, (empresa_value, empresa_nombre) in enumerate(empresas):
             print(f"\n{'='*60}")
             print(f"[{idx+1}/{len(empresas)}] Procesando: {empresa_nombre}")
-            try:
-                # Volver a la página principal para tener un estado limpio (excepto la primera)
-                if idx > 0:
-                    driver.get(ticket_car_base_url)
-                    time.sleep(3)
 
-                # Seleccionar empresa (dispara postback y recarga la página)
-                print("Seleccionando empresa en el desplegable...")
-                sel_elem = wait.until(EC.presence_of_element_located((By.ID, "drpAssignedEntitiesMaster")))
-                Select(sel_elem).select_by_value(empresa_value)
-                time.sleep(4)
+            for mes_idx, mes_str in enumerate(meses):
+                try:
+                    # Volver a estado limpio entre empresa/mes
+                    if idx > 0 or mes_idx > 0:
+                        driver.get(ticket_car_base_url)
+                        time.sleep(3)
 
-                # 11. Clic en "Reportes"
-                print("Buscando menú 'Reportes'...")
-                reportes_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Reportes') and contains(@href, 'MicrositioReportes')]")))
-                reportes_menu.click()
+                    # Seleccionar empresa (dispara postback y recarga la página)
+                    print(f"Seleccionando empresa '{empresa_nombre}' para periodo {mes_str}...")
+                    sel_elem = wait.until(EC.presence_of_element_located((By.ID, "drpAssignedEntitiesMaster")))
+                    Select(sel_elem).select_by_value(empresa_value)
+                    time.sleep(4)
 
-                # 12. Clic en "Resumen de Reportes"
-                print("Buscando 'Resumen de Reportes'...")
-                resumen_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Resumen de Reportes')]")))
-                resumen_menu.click()
+                    # 11. Clic en "Reportes"
+                    reportes_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Reportes') and contains(@href, 'MicrositioReportes')]")))
+                    reportes_menu.click()
 
-                # 13. Clic en "Reportes Financieros"
-                print("Seleccionando 'Reportes Financieros'...")
-                financieros_btn = wait.until(EC.element_to_be_clickable((By.ID, "ctl00_contenido_ucCategoriasReportes_lnkFinancieros")))
-                financieros_btn.click()
-                time.sleep(5)
+                    # 12. Clic en "Resumen de Reportes"
+                    resumen_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Resumen de Reportes')]")))
+                    resumen_menu.click()
 
-                # 14. Buscar y hacer clic en DETALLE DE MOVIMIENTOS con JavaScript puro
-                print("Buscando reporte 'DETALLE DE MOVIMIENTOS POR FACTURACIÓN'...")
-                encontrado = driver.execute_script("""
-                    function clickDetalle(doc) {
-                        var rows = doc.querySelectorAll('tr');
-                        for (var i = 0; i < rows.length; i++) {
-                            if (rows[i].textContent.indexOf('DETALLE DE MOVIMIENTOS') !== -1) {
-                                var btn = rows[i].querySelector('input[type="image"]');
-                                if (btn) { btn.click(); return true; }
+                    # 13. Clic en "Reportes Financieros"
+                    financieros_btn = wait.until(EC.element_to_be_clickable((By.ID, "ctl00_contenido_ucCategoriasReportes_lnkFinancieros")))
+                    financieros_btn.click()
+                    time.sleep(5)
+
+                    # 14. Buscar y hacer clic en DETALLE DE MOVIMIENTOS con JavaScript puro
+                    encontrado = driver.execute_script("""
+                        function clickDetalle(doc) {
+                            var rows = doc.querySelectorAll('tr');
+                            for (var i = 0; i < rows.length; i++) {
+                                if (rows[i].textContent.indexOf('DETALLE DE MOVIMIENTOS') !== -1) {
+                                    var btn = rows[i].querySelector('input[type="image"]');
+                                    if (btn) { btn.click(); return true; }
+                                }
                             }
+                            return false;
+                        }
+                        if (clickDetalle(document)) return true;
+                        var frames = document.querySelectorAll('iframe');
+                        for (var f = 0; f < frames.length; f++) {
+                            try {
+                                var doc = frames[f].contentDocument || frames[f].contentWindow.document;
+                                if (clickDetalle(doc)) return true;
+                            } catch(e) {}
                         }
                         return false;
-                    }
-                    if (clickDetalle(document)) return true;
-                    var frames = document.querySelectorAll('iframe');
-                    for (var f = 0; f < frames.length; f++) {
-                        try {
-                            var doc = frames[f].contentDocument || frames[f].contentWindow.document;
-                            if (clickDetalle(doc)) return true;
-                        } catch(e) {}
-                    }
-                    return false;
-                """)
+                    """)
 
-                if not encontrado:
-                    print(f"⚠️ No se encontró 'DETALLE DE MOVIMIENTOS' para {empresa_nombre}, saltando...")
-                    continue
+                    if not encontrado:
+                        print(f"⚠️ No se encontró 'DETALLE DE MOVIMIENTOS' para {empresa_nombre}, saltando...")
+                        continue
 
-                # 15. Seleccionar PERIODO FACTURACION (mes anterior)
-                print(f"\nSeleccionando periodo {mes_pasado_str}...")
-                periodo_select_elem = wait.until(EC.presence_of_element_located((By.ID, "ctl00_contenido_ucListadoReportes_cpFormulario_ddlPERIODOFACTURACION")))
-                periodo_select = Select(periodo_select_elem)
+                    # 15. Seleccionar PERIODO FACTURACION
+                    print(f"\nSeleccionando periodo {mes_str}...")
+                    periodo_select_elem = wait.until(EC.presence_of_element_located((By.ID, "ctl00_contenido_ucListadoReportes_cpFormulario_ddlPERIODOFACTURACION")))
+                    periodo_select = Select(periodo_select_elem)
 
-                opcion_encontrada = False
-                for option in periodo_select.options:
-                    if mes_pasado_str in option.text:
-                        print(f"Seleccionando el periodo: {option.text}")
-                        periodo_select.select_by_visible_text(option.text)
-                        opcion_encontrada = True
-                        break
+                    opcion_encontrada = False
+                    for option in periodo_select.options:
+                        if mes_str in option.text:
+                            print(f"Seleccionando el periodo: {option.text}")
+                            periodo_select.select_by_visible_text(option.text)
+                            opcion_encontrada = True
+                            break
 
-                if not opcion_encontrada:
-                    print(f"⚠️ No se encontró el periodo {mes_pasado_str} para {empresa_nombre}, saltando...")
-                    continue
+                    if not opcion_encontrada:
+                        print(f"⚠️ No se encontró el periodo {mes_str} para {empresa_nombre}, saltando...")
+                        continue
 
-                time.sleep(2)
+                    time.sleep(2)
 
-                # 16. Escribir destinatario y enviar
-                email_destino = os.getenv('DESTINATARIO_EMAIL')
-                print(f"Enviando reporte al correo: {email_destino}")
+                    # 16. Escribir destinatario y enviar
+                    email_destino = os.getenv('DESTINATARIO_EMAIL')
+                    print(f"Enviando reporte al correo: {email_destino}")
 
-                txt_correo = wait.until(EC.presence_of_element_located((By.ID, "ctl00_contenido_ucListadoReportes_cpDestinatarios_txtWriteMail")))
-                txt_correo.clear()
-                txt_correo.send_keys(email_destino)
+                    txt_correo = wait.until(EC.presence_of_element_located((By.ID, "ctl00_contenido_ucListadoReportes_cpDestinatarios_txtWriteMail")))
+                    txt_correo.clear()
+                    txt_correo.send_keys(email_destino)
 
-                btn_agregar_correo = driver.find_element(By.ID, "ctl00_contenido_ucListadoReportes_cpDestinatarios_btnAgregarMail")
-                btn_agregar_correo.click()
-                time.sleep(1)
+                    btn_agregar_correo = driver.find_element(By.ID, "ctl00_contenido_ucListadoReportes_cpDestinatarios_btnAgregarMail")
+                    btn_agregar_correo.click()
+                    time.sleep(1)
 
-                print("Haciendo clic en 'Aceptar'...")
-                btn_aceptar = driver.find_element(By.ID, "ctl00_contenido_ucListadoReportes_btnAceptar")
-                btn_aceptar.click()
+                    btn_aceptar = driver.find_element(By.ID, "ctl00_contenido_ucListadoReportes_btnAceptar")
+                    btn_aceptar.click()
 
-                print(f"✅ Reporte enviado correctamente para: {empresa_nombre}")
-                time.sleep(5)
+                    print(f"✅ Reporte {mes_str} enviado para: {empresa_nombre}")
+                    reportes_enviados += 1
+                    time.sleep(5)
 
-            except Exception as e:
-                print(f"⚠️ Error procesando '{empresa_nombre}': {e}")
-                print("Continuando con la siguiente empresa...")
-                try:
-                    driver.get(ticket_car_base_url)
-                    time.sleep(3)
-                except Exception:
-                    pass
-                continue
+                except Exception as e:
+                    print(f"⚠️ Error procesando '{empresa_nombre}' / {mes_str}: {e}")
+                    try:
+                        driver.get(ticket_car_base_url)
+                        time.sleep(3)
+                    except Exception:
+                        pass
 
         print(f"\n{'='*60}")
-        print("✅ Proceso completado para todas las empresas.")
+        print(f"✅ Proceso completado. {reportes_enviados} reportes enviados.")
         time.sleep(5)
     except Exception as e:
         print(f"Ocurrió un error en el flujo: {e}")
@@ -277,8 +278,8 @@ def main():
         print("Cerrando el navegador...")
         if 'driver' in locals():
             driver.quit()
-    
-    return len(empresas)
+
+    return reportes_enviados
 
 if __name__ == "__main__":
     n_empresas = main()

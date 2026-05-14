@@ -1,8 +1,8 @@
 import os
 import time
 import re
+import datetime
 from dotenv import load_dotenv
-from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -15,6 +15,41 @@ load_dotenv()
 PASE_USER = os.getenv('PASE_USER')
 PASE_PASSWORD = os.getenv('PASE_PASSWORD')
 TWOCAPTCHA_API_KEY = os.getenv('TWOCAPTCHA_API_KEY')
+
+_MESES_ES = {
+    'ENERO': 1, 'FEBRERO': 2, 'MARZO': 3, 'ABRIL': 4,
+    'MAYO': 5, 'JUNIO': 6, 'JULIO': 7, 'AGOSTO': 8,
+    'SEPTIEMBRE': 9, 'OCTUBRE': 10, 'NOVIEMBRE': 11, 'DICIEMBRE': 12
+}
+
+def _periodo_en_rango(texto, meses_objetivo):
+    """True si el periodo de facturación cubre al menos uno de los meses objetivo."""
+    t = texto.upper()
+    years = re.findall(r'\b(\d{4})\b', t)
+    if not years:
+        return False
+    end_year = int(years[-1])
+
+    match_end = re.search(r'(\w+)\s+DEL\s+' + str(end_year), t)
+    if not match_end:
+        return False
+    end_month = _MESES_ES.get(match_end.group(1))
+    if not end_month:
+        return False
+
+    match_start = re.search(r'DEL\s+\d+\s+(?:DE\s+)?(\w+)', t)
+    start_month = _MESES_ES.get(match_start.group(1)) if match_start else None
+    if not start_month:
+        # Período de mes calendario (ej: "DEL 01 AL 30 DE MARZO DEL 2026")
+        start_month = end_month
+
+    start_year = end_year if start_month <= end_month else end_year - 1
+
+    for ty, tm in meses_objetivo:
+        if (start_year, start_month) <= (ty, tm) <= (end_year, end_month):
+            return True
+    return False
+
 
 def solve_recaptcha(sitekey, url):
     print(f"Resolviendo captcha (sitekey: {sitekey})... esto puede tardar un poco.")
@@ -31,7 +66,220 @@ def solve_recaptcha(sitekey, url):
         print(f"Error resolviendo captcha: {e}")
         return None
 
-def main():
+def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
+    """Flujo de descarga para cuentas PREPAGO (pestaña CRUCES con filtro por mes)."""
+    print("Modalidad PREPAGO: usando flujo de pestaña CRUCES...")
+
+    # 1. Navegar a CRUCES si hay tab con ese texto (opcional: PREPAGO puede ya estar ahí)
+    try:
+        # Hacerlo case-insensitive y más tolerante (puede ser 'Cruces' o 'CRUCES')
+        cruces_tab = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[contains(translate(., 'cruces', 'CRUCES'), 'CRUCES')]")))
+        driver.execute_script("arguments[0].click();", cruces_tab)
+        print("  ✅ Cambiado a pestaña CRUCES exitosamente.")
+        time.sleep(2)
+    except Exception as e:
+        print(f"  ⚠️ No se pudo dar clic explícito en la pestaña CRUCES: {e}")
+        pass
+
+    # 2. Limpiar filtros activos (botón "X + embudo")
+    try:
+        limpiar_btn = wait.until(EC.element_to_be_clickable((By.XPATH,
+            "//button["
+            ".//*[contains(@d,'M14.76,20.83')]"           # SVG FilterAltOff
+            " or @aria-label='limpiar filtros'"
+            " or @title='Limpiar filtros'"
+            "]")))
+        limpiar_btn.click()
+        time.sleep(1)
+    except Exception:
+        pass  # Sin filtros activos, continuar
+
+    # Determinar qué meses descargar
+    if backfill_mode and meses_objetivo:
+        # Calcular data-values exactos para los meses objetivo
+        today = datetime.date.today()
+        data_values = []
+        for ty, tm in meses_objetivo:
+            months_ago = (today.year - ty) * 12 + (today.month - tm)
+            if months_ago > 0:
+                data_values.append(str(months_ago))
+        print(f"Modo backfill filtrado: data-values {data_values}")
+    elif backfill_mode:
+        # Sin filtro: todos los meses disponibles
+        mes_dropdown = wait.until(EC.element_to_be_clickable(
+            (By.XPATH, "//div[@role='button'][@aria-haspopup='true']")))
+        mes_dropdown.click()
+        time.sleep(1)
+        opciones = wait.until(EC.presence_of_all_elements_located(
+            (By.XPATH, "//li[@role='option'][@data-value]")))
+        data_values = [op.get_attribute('data-value')
+                       for op in opciones if int(op.get_attribute('data-value')) > 0]
+        driver.find_element(By.TAG_NAME, 'body').click()
+        time.sleep(1)
+    else:
+        data_values = ["1"]  # Solo mes anterior
+
+    for dv in data_values:
+        # 3. Abrir dropdown de mes y seleccionar
+        try:
+            # Hacer clic en el body para cerrar cualquier menú previo (ej. exportación)
+            driver.find_element(By.TAG_NAME, 'body').click()
+            time.sleep(1)
+        except:
+            pass
+
+        # === LIMPIAR FILTROS DEL CICLO ANTERIOR ===
+        try:
+            limpiar_btn = driver.find_element(By.XPATH,
+                "//button["
+                ".//*[contains(@d,'M14.76,20.83')]"
+                " or @aria-label='limpiar filtros'"
+                " or @title='Limpiar filtros'"
+                " or @title='Remover filtro'"
+                " or ancestor::span[@title='Remover filtro']"
+                "]")
+            if limpiar_btn.is_displayed() and limpiar_btn.is_enabled():
+                print("  Limpiando filtro anterior...")
+                driver.execute_script("arguments[0].click();", limpiar_btn)
+                time.sleep(2)
+        except:
+            pass
+        # ==========================================
+
+        # Buscar de forma infalible el dropdown correcto:
+        # Hacemos clic en los posibles dropdowns hasta que aparezcan las opciones de mes (li con role=option)
+        opciones_encontradas = False
+        dropdowns = driver.find_elements(By.XPATH, "//div[@role='button'][@aria-haspopup='listbox' or @aria-haspopup='true']")
+        for dd in dropdowns:
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", dd)
+                time.sleep(0.5)
+                driver.execute_script("arguments[0].click();", dd)
+                time.sleep(1.5)
+                
+                # Verificar si aparecieron las opciones y están VISIBLES
+                # (MUI a veces deja menús ocultos en el DOM, ej. el de clientes)
+                opciones = driver.find_elements(By.XPATH, "//li[@role='option']")
+                opciones_visibles = [op for op in opciones if op.is_displayed()]
+                
+                if opciones_visibles:
+                    # Confirmar que es el menú de meses (las opciones deberían tener años, ej. '2026')
+                    texto_opciones = " ".join([op.text for op in opciones_visibles])
+                    if "202" in texto_opciones or "Personalizado" in texto_opciones:
+                        opciones_encontradas = True
+                        break
+                
+                # Si no aparecieron o no es el menú correcto, cerramos este menú dándole clic al body
+                driver.find_element(By.TAG_NAME, 'body').click()
+                time.sleep(0.5)
+            except:
+                pass
+
+        if not opciones_encontradas:
+            print(f"❌ No se pudo abrir el menú desplegable para buscar data-value={dv}.")
+            raise Exception(f"No dropdown opened for dv={dv}")
+
+        try:
+            opcion = wait.until(EC.element_to_be_clickable(
+                (By.XPATH, f"//li[@role='option'][@data-value='{dv}']")))
+        except Exception as e:
+            # Intentar buscar por JavaScript
+            opciones = driver.find_elements(By.XPATH, "//li[@role='option']")
+            opcion = None
+            for op in opciones:
+                if op.get_attribute('data-value') == str(dv):
+                    print("Se encontró por JS, forzando click...")
+                    driver.execute_script("arguments[0].click();", op)
+                    opcion = op
+                    break
+            if not opcion:
+                print(f"⚠️ El periodo (data-value={dv}) NO ESTÁ DISPONIBLE en la plataforma. Saltando...")
+                # Cerrar el menú antes de continuar
+                try:
+                    driver.find_element(By.TAG_NAME, 'body').click()
+                    time.sleep(1)
+                except: pass
+                continue
+
+        print(f"  Seleccionando periodo: {opcion.text if opcion else 'N/A'}")
+        try:
+            opcion.click()
+        except:
+            if opcion: driver.execute_script("arguments[0].click();", opcion)
+        time.sleep(2)
+
+        # 4. Aplicar filtro (botón "embudo")
+        aplicar_btn = wait.until(EC.element_to_be_clickable((By.XPATH,
+            "//button["
+            ".//*[contains(@d,'M14,12V19.88')]"           # SVG FilterAlt
+            " or @aria-label='aplicar filtros'"
+            " or @title='Aplicar filtros'"
+            "]")))
+        aplicar_btn.click()
+        
+        # Esperar a que la tabla termine de cargar los datos desde el servidor (puede ser lento)
+        time.sleep(8)
+
+        # Verificar si hay registros antes de exportar
+        try:
+            # Buscar el texto EXACTO "sin registros" para no confundirlo con "Sin registros seleccionados" del footer
+            sin_registros = driver.find_elements(By.XPATH, "//*[normalize-space(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')) = 'sin registros' or normalize-space(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')) = 'no rows']")
+            if any(el.is_displayed() for el in sin_registros):
+                print(f"  ⚠️ No hay registros para este mes (aparece 'Sin registros'). Saltando descarga...")
+                continue
+        except:
+            pass
+
+        # 5. Expandir "Más opciones de filtros" SOLO si el botón de exportar está oculto
+        try:
+            exportar_btns = driver.find_elements(By.XPATH, "//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'export') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'export') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'descargar')]")
+            if not any(b.is_displayed() for b in exportar_btns):
+                mas_opciones_btn = driver.find_element(By.XPATH, "//button[@title='Más opciones de filtros' or @aria-label='Más opciones de filtros']")
+                mas_opciones_btn.click()
+                time.sleep(1)
+        except: pass
+
+        # 6. Exportar CSV: abrir menú → seleccionar CSV
+        try:
+            # Esperamos hasta 20 segundos para que la API responda y la tabla renderice el botón de exportar
+            wait_largo = WebDriverWait(driver, 20)
+            def get_export_btn(d):
+                btns = d.find_elements(By.XPATH, "//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'export') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'export') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'descargar')]")
+                visibles = [b for b in btns if b.is_displayed()]
+                return visibles[-1] if visibles else False
+                
+            exportar_btn = wait_largo.until(get_export_btn)
+            driver.execute_script("arguments[0].click();", exportar_btn)
+        except:
+            print(f"  ⚠️ El botón de exportar no apareció tras 20s (quizá la tabla sigue vacía). Saltando descarga...")
+            continue
+
+        # Esperar a que el menú sea visible (buscar por el div role="presentation")
+        wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//div[@role='presentation']")))
+        time.sleep(1)
+
+        # Buscar y hacer clic en CSV
+        try:
+            # Buscar opción de CSV ya sea por el atributo title, o por el texto que contenga 'coma' o 'csv'
+            xpath_csv = "//li[@role='menuitem'][contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'coma') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'csv') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'coma') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'csv')]"
+            csv_option = wait.until(EC.element_to_be_clickable((By.XPATH, xpath_csv)))
+            driver.execute_script("arguments[0].click();", csv_option)
+            print(f"  ✅ Exportación CSV iniciada para periodo data-value={dv}")
+            time.sleep(8)
+        except Exception as e:
+            print("❌ No se encontró la opción CSV. Imprimiendo opciones de menú disponibles:")
+            try:
+                opciones = driver.find_elements(By.XPATH, "//li[@role='menuitem']")
+                for idx, op in enumerate(opciones):
+                    print(f"Opción {idx}: text='{op.text}', title='{op.get_attribute('title')}', innerHTML='{op.get_attribute('innerHTML')}'")
+            except Exception as e2:
+                print(f"Tampoco se pudieron extraer las opciones: {e2}")
+            raise e
+
+
+def main(backfill_mode=False, meses_objetivo=None, start_from=0):
     print("Iniciando RPA para Pase...")
     
     if not TWOCAPTCHA_API_KEY:
@@ -71,8 +319,8 @@ def main():
     url = os.getenv('PASE_URL')
     
     try:
-        indice_actual = 0
-        num_clientes = 1 # Se actualizará en la primera pasada
+        indice_actual = start_from
+        num_clientes = start_from + 1  # Se actualizará en la primera pasada
         
         while indice_actual < num_clientes:
             print(f"\n{'='*50}")
@@ -128,12 +376,18 @@ def main():
                     if token:
                         print("Inyectando token en la página...")
                         # Insertar en el textarea oculto
-                        driver.execute_script(f"document.getElementById('g-recaptcha-response').innerHTML = '{token}';")
+                        driver.execute_script(
+                            "document.getElementById('g-recaptcha-response').innerHTML = arguments[0];",
+                            token,
+                        )
                         time.sleep(1)
                         
                         # Dato vital: Pase requiere que ejecutemos el callback del captcha
                         print("Ejecutando el callback onRecaptchaValid...")
-                        driver.execute_script(f"if(typeof onRecaptchaValid !== 'undefined') {{ onRecaptchaValid('{token}'); }}")
+                        driver.execute_script(
+                            "if(typeof onRecaptchaValid !== 'undefined') { onRecaptchaValid(arguments[0]); }",
+                            token,
+                        )
                         time.sleep(2)
                 else:
                     print("No se encontró el data-sitekey en el widget.")
@@ -162,81 +416,125 @@ def main():
             num_clientes = len(opciones)
             
             if num_clientes > 0 and indice_actual < num_clientes:
-                nombre_cliente = opciones[indice_actual].text.replace('\n', ' - ')
-                print(f"Seleccionando la empresa: {nombre_cliente}")
+                print(f"Seleccionando cliente {indice_actual + 1} de {num_clientes}...")
                 driver.execute_script("arguments[0].click();", opciones[indice_actual])
-                time.sleep(1) # Pausa para que se registre la selección
-                
-                # Clic en el botón Continuar
+                time.sleep(1)
+
                 print("Haciendo clic en 'Continuar'...")
                 btn_continuar = driver.find_element(By.XPATH, "//button[span[contains(text(), 'Continuar')]]")
                 btn_continuar.click()
-                
-                print(f"\n¡Bienvenido al panel principal de {nombre_cliente}!")
-                
+
+                print(f"\nPanel principal cargado.")
+
                 # --- 5. Descarga de Reportes ---
                 print("\nIniciando descarga de reportes de consumo...")
-                
-                # El XPath asegura buscar el botón de CSV específicamente en la tarjeta de "DET. CRUCES (NUEVO)"
-                xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
-                
-                # Al entrar, el sistema carga automáticamente el corte más reciente (índice 0)
-                print("Esperando botón de descarga del corte actual (Mes más reciente)...")
+
+                def modalidad_cargada(driver):
+                    try:
+                        # Intentar XPath original (cliente 1-4)
+                        elem = driver.find_element(By.XPATH, "//span[normalize-space(text())='Modalidad']/following-sibling::h6")
+                        text = elem.text.strip()
+                        if text:
+                            return elem
+                    except:
+                        pass
+
+                    try:
+                        # Fallback: buscar h6 que contiene PREPAGO/POSPAGO/DECENAL directamente
+                        elem = driver.find_element(By.XPATH, "//h6[contains(., 'PREPAGO') or contains(., 'POSPAGO') or contains(., 'DECENAL')]")
+                        text = elem.text.strip()
+                        if text:
+                            return elem
+                    except:
+                        pass
+
+                    return False
+
+                wait_largo = WebDriverWait(driver, 15)
+                modalidad_elem = wait_largo.until(modalidad_cargada)
+                modalidad = modalidad_elem.text.strip().upper()
+                print(f"Modalidad detectada: {modalidad}")
+
                 try:
-                    # Usamos un wait más corto (5s) para no perder tiempo si la empresa no tiene datos
-                    wait_corto = WebDriverWait(driver, 5)
-                    btn_csv_actual = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
-                    
-                    print("Descargando archivo CSV del corte actual...")
-                    btn_csv_actual.click()
-                    time.sleep(5) # Dar tiempo para que el navegador intercepte e inicie la descarga
-                    # Revisamos si es un mes natural leyendo el texto del periodo
-                    periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
-                    texto_periodo = periodo_dropdown.text
-                    print(f"Periodo detectado: {texto_periodo}")
-                    
-                    # Verificamos si empieza el día 01 (ej. "DEL 01 AL 31...")
-                    match_mes_completo = re.search(r"DEL\s+01\b", texto_periodo, re.IGNORECASE)
-                    
-                    if match_mes_completo:
-                        print("✅ Es un mes calendario completo. No se necesita descargar el corte anterior.")
-                        print("Esperando 5 segundos adicionales para la descarga...")
-                        time.sleep(5)
+                    if modalidad == "PREPAGO":
+                        _descargar_prepago(driver, wait, backfill_mode, meses_objetivo)
+                    elif modalidad not in ("POSPAGO",):
+                        print(f"⚠️ Modalidad '{modalidad}' no soportada, omitiendo descargas.")
                     else:
-                        # Ahora seleccionamos el corte anterior (índice 1) para tener el mes completo
-                        print("\nCiclo desfasado detectado. Abriendo el menú desplegable para el corte anterior...")
-                        periodo_dropdown.click()
-                        time.sleep(1.5)
-                        
-                        # Localizar las opciones del periodo que flotan en pantalla
-                        opciones_periodo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
-                        if len(opciones_periodo) >= 2:
-                            print("Seleccionando el corte del mes anterior cerrado...")
-                            opciones_periodo[1].click()
-                            
-                            print("Esperando a que la página actualice la información del nuevo periodo...")
-                            time.sleep(6) # Pausa para que la página haga el Request y actualice los botones de descarga
-                            
-                            # Volver a ubicar el botón porque la página reconstruyó los elementos (DOM)
-                            btn_csv_anterior = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
-                            print("Descargando archivo CSV del corte anterior...")
-                            btn_csv_anterior.click()
-                            
-                            print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
-                            time.sleep(15)
+                        xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
+                        wait_corto = WebDriverWait(driver, 5)
+
+                        if backfill_mode:
+                            periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
+                            periodo_dropdown.click()
+                            time.sleep(1.5)
+                            opciones_all = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+                            n_periodos = len(opciones_all)
+                            print(f"Modo backfill: {n_periodos} periodos encontrados. Descargando todos...")
+                            driver.find_element(By.TAG_NAME, 'body').click()
+                            time.sleep(1)
+
+                            for i in range(n_periodos):
+                                periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
+                                periodo_dropdown.click()
+                                time.sleep(1.5)
+                                opciones_iter = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+                                if i >= len(opciones_iter):
+                                    break
+                                texto = opciones_iter[i].text
+                                if meses_objetivo and not _periodo_en_rango(texto, meses_objetivo):
+                                    print(f"  Saltando periodo fuera del rango: {texto[:50]}...")
+                                    driver.find_element(By.TAG_NAME, 'body').click()
+                                    time.sleep(0.5)
+                                    continue
+                                print(f"  Periodo {i+1}/{n_periodos}: {texto}")
+                                opciones_iter[i].click()
+                                time.sleep(6)
+                                btn_csv_i = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                btn_csv_i.click()
+                                time.sleep(10)
+
+                            print("✅ Descarga de todos los periodos completada.")
                         else:
-                            print("No hay suficientes periodos en el historial para descargar uno anterior.")
-                        
+                            btn_csv_actual = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                            print("Descargando archivo CSV del corte actual...")
+                            btn_csv_actual.click()
+                            time.sleep(5)
+
+                            periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
+                            texto_periodo = periodo_dropdown.text
+                            print(f"Periodo detectado: {texto_periodo}")
+
+                            match_mes_completo = re.search(r"DEL\s+01\b", texto_periodo, re.IGNORECASE)
+
+                            if match_mes_completo:
+                                print("✅ Es un mes calendario completo. No se necesita descargar el corte anterior.")
+                                time.sleep(5)
+                            else:
+                                print("\nCiclo desfasado detectado. Abriendo el menú desplegable para el corte anterior...")
+                                periodo_dropdown.click()
+                                time.sleep(1.5)
+                                opciones_periodo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+                                if len(opciones_periodo) >= 2:
+                                    print("Seleccionando el corte del mes anterior cerrado...")
+                                    opciones_periodo[1].click()
+                                    time.sleep(6)
+                                    btn_csv_anterior = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                    print("Descargando archivo CSV del corte anterior...")
+                                    btn_csv_anterior.click()
+                                    print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
+                                    time.sleep(15)
+                                else:
+                                    print("No hay suficientes periodos en el historial para descargar uno anterior.")
+
                     print("✅ Descargas completadas para esta empresa.")
-                    
+
                     # === INGESTA A BIGQUERY ===
                     from bigquery import bq_ingestion
-                    
-                    # Esperar extra para descargas rezagadas
                     time.sleep(3)
                     archivos = os.listdir(descargas_dir)
                     archivos_csv = [os.path.join(descargas_dir, f) for f in archivos if f.endswith('.csv')]
-                    
+
                     if archivos_csv:
                         print(f"🚀 Se encontraron {len(archivos_csv)} archivo(s) CSV. Mandando a la aduana de BigQuery...")
                         for archivo in archivos_csv:
@@ -247,18 +545,27 @@ def main():
                             except Exception as e:
                                 print(f"❌ Error durante la ingesta a BQ de {archivo}: {e}")
                             finally:
-                                os.remove(archivo) # Limpiar carpeta
+                                respaldo_dir = os.path.join(os.getcwd(), "respaldo_descargas")
+                                import sys
+                                # Add project root to path so we can import gcs_uploader
+                                raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                                if raiz_proyecto not in sys.path:
+                                    sys.path.append(raiz_proyecto)
+                                import gcs_uploader
+                                gcs_uploader.subir_y_borrar_local(archivo, 'Pase')
                     else:
                         print("⚠️ No se encontraron archivos CSV en la carpeta temporal.")
-                        
+
                 except Exception as e:
-                    print("⚠️ No se encontraron reportes (o el botón de descarga) para esta empresa. Omitiendo...")
+                    import traceback
+                    print(f"⚠️ Error en descargas/ingesta: {e}")
+                    traceback.print_exc()
                 
                 # --- 6. Cerrar Sesión ---
                 print("\nCerrando sesión para continuar con la siguiente empresa...")
-                # Clic en los 3 puntitos del menú superior derecho
+                time.sleep(1.5)  # Esperar que desaparezcan overlays/backdrops de MUI
                 menu_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='More']")))
-                menu_btn.click()
+                driver.execute_script("arguments[0].click();", menu_btn)
                 time.sleep(1)
                 
                 # Clic en Cerrar Sesión
