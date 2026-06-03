@@ -1,7 +1,31 @@
 import threading
 import time
+import sys
+import os
+import datetime
+import atexit
 from scrapers import edenred_rpa, supramax_rpa, pase_rpa
 from extractors import edenred_extractor
+
+class _Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+    def flush(self):
+        for s in self.streams: s.flush()
+
+# Crear directorio de logs y redirigir salida estándar y de errores
+os.makedirs("logs_orquestador", exist_ok=True)
+log_path = f"logs_orquestador/orquestador_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+_log_file = open(log_path, "w", encoding="utf-8")
+sys.stdout = _Tee(sys.__stdout__, _log_file)
+sys.stderr = _Tee(sys.__stderr__, _log_file)
+
+atexit.register(lambda: _log_file.close())
+
 
 def flujo_edenred():
     print("\n💎 [EDENRED] Iniciando flujo (Solicitud + Extracción)...")
@@ -31,6 +55,7 @@ def main():
     start_time = time.time()
     print("="*60)
     print("🚀 INICIANDO ORQUESTADOR MAESTRO (SECUENCIAL) 🚀")
+    print(f"📄 Guardando log en: {log_path}")
     print("="*60)
 
     # Ejecutamos secuencialmente para evitar que Chrome/Selenium
@@ -43,6 +68,7 @@ def main():
     total_minutos = (time.time() - start_time) / 60
     print("\n" + "="*60)
     print(f"✅ PROCESO GLOBAL FINALIZADO EN {total_minutos:.2f} MINUTOS")
+    print(f"📄 Log completo guardado en: {log_path}")
     print("="*60)
 
 if __name__ == "__main__":

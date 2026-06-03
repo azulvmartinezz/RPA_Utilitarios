@@ -36,6 +36,7 @@ def setup_bigquery():
         bigquery.SchemaField("Cantidad", "FLOAT", mode="NULLABLE", description="Litros cargados (Solo aplica para combustible)"),
         bigquery.SchemaField("Importe", "FLOAT", mode="NULLABLE", description="Monto gastado en MXN"),
         bigquery.SchemaField("Sistema", "STRING", mode="REQUIRED", description="Fuente: Pase, Supramax o Edenred"),
+        bigquery.SchemaField("Empresa", "STRING", mode="NULLABLE", description="Empresa o cuenta origen del registro"),
     ]
 
     table = bigquery.Table(table_id, schema=schema)

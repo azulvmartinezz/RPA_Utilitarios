@@ -10,7 +10,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 
 import sys
@@ -46,10 +46,64 @@ def _guardar_diagnostico(driver, descargas_dir, username, etapa):
         print(f"⚠️ No se pudo guardar diagnóstico ({e})")
 
 
-def process_account(username, password, fini_override=None, ffin_override=None, meses_override=None, meses_meta=None):
+def _renderer_timeout(err):
+    return "timed out receiving message from renderer" in str(err).lower()
+
+
+def _stop_loading(driver, mensaje):
+    print(mensaje)
+    try:
+        driver.execute_script("window.stop();")
+        time.sleep(1)
+    except Exception as stop_err:
+        print(f"  ⚠️ No se pudo detener la carga: {stop_err}")
+
+
+def _esta_en_login(driver):
+    try:
+        return len(driver.find_elements(By.ID, "loginform")) > 0
+    except Exception:
+        return False
+
+
+def _intentar_submit_login(driver, wait, pwd_input):
+    intentos = [
+        ("click normal", lambda: wait.until(EC.element_to_be_clickable((By.ID, "login"))).click()),
+        ("enter en password", lambda: pwd_input.send_keys(Keys.RETURN)),
+        ("submit del formulario", lambda: driver.execute_script("arguments[0].submit();", wait.until(EC.presence_of_element_located((By.ID, "loginform"))))),
+    ]
+
+    for descripcion, accion in intentos:
+        try:
+            print(f"  -> Intentando login por {descripcion}...")
+            accion()
+            time.sleep(2)
+
+            if not _esta_en_login(driver):
+                return True
+
+            REPORTES_XPATH = "//a[@title='Reportes'] | //a[normalize-space(text())='Reportes'] | //input[@value='Reportes']"
+            try:
+                WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, REPORTES_XPATH)))
+                return True
+            except TimeoutException:
+                pass
+        except WebDriverException as e:
+            if _renderer_timeout(e):
+                _stop_loading(driver, f"  ⚠️ La navegación después del login por {descripcion} se tardó demasiado. Forzando window.stop()...")
+            else:
+                print(f"  ⚠️ Falló el intento de login por {descripcion}: {e}")
+        except Exception as e:
+            print(f"  ⚠️ Falló el intento de login por {descripcion}: {e}")
+
+    return False
+
+
+def process_account(username, password, fini_override=None, ffin_override=None, meses_override=None, meses_meta=None, empresa=None):
     print(f"\n--- Iniciando proceso para cuenta Supramax: {username} ---")
 
     chrome_options = Options()
+    chrome_options.page_load_strategy = 'eager'
     # chrome_options.add_argument("--headless")
 
     descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
@@ -75,10 +129,15 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
         sys._chromedriver_path = ChromeDriverManager().install()
     service = Service(sys._chromedriver_path)
     driver = webdriver.Chrome(service=service, options=chrome_options)
-    driver.set_page_load_timeout(300)   # 5 min para cuentas con reportes pesados
-    driver.set_script_timeout(300)
+    
+    # Evitar HTTP read timeouts (Selenium default es 120s) al procesar reportes pesados
+    if hasattr(driver, "command_executor") and hasattr(driver.command_executor, "_client_config"):
+        driver.command_executor._client_config.timeout = 310
+
+    driver.set_page_load_timeout(180)   # Evitar quedarse trabado indefinidamente si el navegador espera elementos secundarios
+    driver.set_script_timeout(180)
     wait = WebDriverWait(driver, 15)
-    long_wait = WebDriverWait(driver, 300)
+    long_wait = WebDriverWait(driver, 180)
 
     url = os.getenv('SUPRAMAX_URL')
 
@@ -98,7 +157,14 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
     fallos = []  # meses que no se pudieron procesar
 
     try:
-        driver.get(url)
+        try:
+            driver.get(url)
+        except TimeoutException:
+            print("  ⚠️ La carga inicial de la página web de Supramax tardó más de 180s. Deteniendo carga con window.stop() para intentar login...")
+            try:
+                driver.execute_script("window.stop();")
+            except:
+                pass
 
         # Login Robusto
         print("Ingresando credenciales...")
@@ -115,24 +181,49 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
         pwd_input.send_keys(password)
         
         time.sleep(0.5)
-        driver.find_element(By.ID, "login").click()
+        try:
+            login_exitoso = _intentar_submit_login(driver, wait, pwd_input)
+        except TimeoutException:
+            print("  ⚠️ No se encontró el formulario de login a tiempo.")
+            raise
 
         # Esperar pantalla principal (busca menú Reportes por title o por texto)
         REPORTES_XPATH = "//a[@title='Reportes'] | //a[normalize-space(text())='Reportes'] | //input[@value='Reportes']"
         try:
             WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.XPATH, REPORTES_XPATH)))
         except TimeoutException:
-            print(f"❌ No apareció el menú 'Reportes' después del login. Se omite esta cuenta.")
+            if _esta_en_login(driver):
+                print(f"❌ El formulario de login siguió visible después del envío. Se omite esta cuenta.")
+            else:
+                print(f"❌ No apareció el menú 'Reportes' después del login. Se omite esta cuenta.")
             _guardar_diagnostico(driver, descargas_dir, username, "login")
             return
 
         for fini, ffin in meses:
             print(f"\n[Mes {meses.index((fini, ffin))+1}/{len(meses)}] {fini} → {ffin}")
             
+            # Dar un respiro al servidor de 1.5s antes de procesar para evitar sobrecargarlo
+            time.sleep(1.5)
+            
             try:
                 # Navegación a reportes
-                wait.until(EC.element_to_be_clickable((By.XPATH, REPORTES_XPATH))).click()
-                wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Reporte de consumos')]"))).click()
+                try:
+                    wait.until(EC.element_to_be_clickable((By.XPATH, REPORTES_XPATH))).click()
+                except TimeoutException:
+                    print("  ⚠️ El click en menú Reportes excedió el timeout. Forzando window.stop()...")
+                    try:
+                        driver.execute_script("window.stop();")
+                    except:
+                        pass
+
+                try:
+                    wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Reporte de consumos')]"))).click()
+                except TimeoutException:
+                    print("  ⚠️ El click en Reporte de consumos excedió el timeout. Forzando window.stop()...")
+                    try:
+                        driver.execute_script("window.stop();")
+                    except:
+                        pass
 
                 # Inyectar fechas via JS (los campos tienen date-picker y son read-only)
                 wait.until(EC.presence_of_element_located((By.ID, "fini")))
@@ -152,29 +243,78 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
 
                 _click_js(driver, wait, (By.ID, "btn_submit"), "Procesar")
 
-                # Verificar si hay datos
+                # Esperar a que el servidor procese el reporte. Si el renderizado del navegador o la conexión
+                # de red se queda colgada por más de 150s, saltará un TimeoutException.
+                # Detendremos la carga con window.stop() para revisar si el DOM ya tiene los elementos listos.
                 try:
-                    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, "//td[contains(text(), 'No se encontraron registros')]")))
-                    print("⚠️ Sin registros para este periodo, saltando...")
-                    continue
+                    wait_condicion = (By.XPATH, "//td[contains(text(), 'No se encontraron registros')] | //a[contains(text(), 'Detalles por Venta Unitaria')]")
+                    WebDriverWait(driver, 180).until(EC.presence_of_element_located(wait_condicion))
+                except TimeoutException:
+                    _stop_loading(driver, "  ⚠️ El procesamiento tardó más de 180s o se quedó pegado esperando recursos. Forzando window.stop()...")
+                except WebDriverException as e:
+                    if _renderer_timeout(e):
+                        _stop_loading(driver, "  ⚠️ El renderer se tardó demasiado durante el procesamiento. Forzando window.stop() para revisar el DOM actual...")
+                    else:
+                        raise
+
+                # Verificar si no se encontraron registros de manera definitiva en el DOM actual
+                registros_vacios = False
+                try:
+                    driver.find_element(By.XPATH, "//td[contains(text(), 'No se encontraron registros')]")
+                    registros_vacios = True
                 except:
                     pass
 
-                # Si hay datos, descargar
-                _click_js(driver, wait, (By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]"), "Detalles por Venta Unitaria")
+                if registros_vacios:
+                    print("⚠️ Sin registros para este periodo, saltando...")
+                    continue
 
-                # Esperar a que cargue la página de detalles y hacer scroll al fondo
-                time.sleep(2)
+                # Si hay datos, buscar el botón Detalles por Venta Unitaria con un wait corto
+                try:
+                    detalles_btn = WebDriverWait(driver, 30).until(
+                        EC.presence_of_element_located((By.XPATH, "//a[contains(text(), 'Detalles por Venta Unitaria')]"))
+                    )
+                except TimeoutException:
+                    print("❌ No se encontró el botón 'Detalles por Venta Unitaria' tras procesar.")
+                    raise TimeoutException("No se encontró el botón 'Detalles por Venta Unitaria'")
+
+                # Hacer click usando JS para navegar a los detalles
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", detalles_btn)
+                time.sleep(0.3)
+                try:
+                    driver.execute_script("arguments[0].click();", detalles_btn)
+                    print("  -> Click: Detalles por Venta Unitaria")
+                except TimeoutException:
+                    print("  ⚠️ El click en Detalles por Venta Unitaria excedió el timeout de carga. Forzando window.stop()...")
+                    try:
+                        driver.execute_script("window.stop();")
+                    except:
+                        pass
+
+                # Esperar a que cargue la página de detalles y el botón de descarga XLS esté presente.
+                # Nuevamente, si se queda colgado esperando recursos secundarios (ej. imágenes pesadas), forzamos stop.
+                descargar_xls_xpath = (
+                    "//tr[td[contains(normalize-space(text()), 'Todos los consumos.')]]//input[@type='image']"
+                    " | //a[img[contains(@src,'xls') or contains(@src,'excel')]]"
+                    " | //a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'versión xls')]"
+                    " | //a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'version xls')]"
+                )
+                try:
+                    WebDriverWait(driver, 180).until(EC.presence_of_element_located((By.XPATH, descargar_xls_xpath)))
+                except TimeoutException:
+                    _stop_loading(driver, "  ⚠️ La página de detalles tardó más de 180s o se quedó pegada. Forzando window.stop()...")
+                except WebDriverException as e:
+                    if _renderer_timeout(e):
+                        _stop_loading(driver, "  ⚠️ El renderer se tardó demasiado al cargar detalles. Forzando window.stop() para intentar descargar con el DOM actual...")
+                    else:
+                        raise
+
+                # Ahora que la página está estática en el navegador, hacemos scroll y hacemos click en Descargar XLS
+                time.sleep(1)
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(0.5)
 
-                descargar_xls_btn = wait.until(EC.element_to_be_clickable(
-                    (By.XPATH,
-                     "//tr[td[contains(normalize-space(text()), 'Todos los consumos.')]]//input[@type='image']"
-                     " | //a[img[contains(@src,'xls') or contains(@src,'excel')]]"
-                     " | //a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'versión xls')]"
-                     " | //a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'version xls')]"
-                    )))
+                descargar_xls_btn = wait.until(EC.element_to_be_clickable((By.XPATH, descargar_xls_xpath)))
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", descargar_xls_btn)
                 
                 # Iniciar monitoreo de descarga
@@ -182,10 +322,10 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
                 descargar_xls_btn.click()
                 print("  -> Click: Descargar XLS")
 
-                # Esperar descarga con timeout extendido (180s para cuentas con reportes pesados)
+                # Esperar descarga con timeout extendido (300s para cuentas con reportes pesados)
                 tiempo_espera = 0
                 archivo_descargado = None
-                while tiempo_espera < 180:
+                while tiempo_espera < 300:
                     archivos = os.listdir(descargas_dir)
                     archivos_xls = [
                         os.path.join(descargas_dir, f) 
@@ -204,13 +344,13 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
                     print(f"✅ Archivo descargado. Subiendo a BigQuery...")
                     from bigquery import bq_ingestion
                     try:
-                        df_limpio = bq_ingestion.procesar_supramax(archivo_descargado)
+                        df_limpio = bq_ingestion.procesar_supramax(archivo_descargado, empresa=empresa or username)
                         if df_limpio is not None:
                             bq_ingestion.ingest_to_bigquery(df_limpio)
                     except Exception as e:
                         print(f"❌ Error en ingesta a BQ: {e}")
                     finally:
-                        gcs_uploader.subir_y_borrar_local(archivo_descargado, 'Supramax')
+                        gcs_uploader.subir_y_borrar_local(archivo_descargado, 'Supramax', empresa=empresa or username)
                 else:
                     print("⚠️ Tiempo de espera agotado. No se detectó el archivo.")
 

@@ -5,6 +5,8 @@
 !.env.example
 .venv/
 venv/
+.claude/
+.antigravitycli/
 
 # Python
 __pycache__/
@@ -33,6 +35,7 @@ edenred_profile/
 # Descargas temporales y reportes de datos
 descargas_temporales/
 respaldo_descargas/
+descargas_gcs/
 *.xlsx
 *.xls
 *.xlsm
@@ -42,6 +45,7 @@ respaldo_descargas/
 
 # Logs y resultados
 logs_backfill/
+logs_orquestador/
 *.log
 REPORTE_CONCILIACION_*.xlsx
 RESULTADO_CONCILIACION.xlsx
@@ -56,3 +60,4 @@ verificar_faltantes.py
 gcloud/
 application_default_credentials.json
 *.json
+

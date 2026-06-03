@@ -1,6 +1,7 @@
 import os
 import time
 import datetime
+import json
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -19,6 +20,40 @@ load_dotenv()
 EDENRED_USER = os.getenv('EDENRED_USER')
 EDENRED_PASSWORD = os.getenv('EDENRED_PASSWORD')
 TWOCAPTCHA_API_KEY = os.getenv('TWOCAPTCHA_API_KEY')
+
+
+def _manifest_path():
+    return os.path.join(os.getcwd(), "descargas_temporales", "edenred_report_manifest.json")
+
+
+def _load_manifest():
+    path = _manifest_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _save_manifest(data):
+    path = _manifest_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=True, indent=2)
+
+
+def _append_pending_report(empresa, mes):
+    manifest = _load_manifest()
+    pending = manifest.get("pending_reports", [])
+    pending.append({
+        "empresa": empresa,
+        "mes": mes,
+        "sent_at": datetime.datetime.now().isoformat()
+    })
+    manifest["pending_reports"] = pending
+    _save_manifest(manifest)
 
 def solve_recaptcha(sitekey, url):
     print(f"Resolviendo captcha (sitekey: {sitekey})... esto puede tardar un poco.")
@@ -257,6 +292,7 @@ def main(meses_override=None):
                     btn_aceptar.click()
 
                     print(f"✅ Reporte {mes_str} enviado para: {empresa_nombre}")
+                    _append_pending_report(empresa_nombre, mes_str)
                     reportes_enviados += 1
                     time.sleep(5)
 

@@ -4,6 +4,17 @@ import pandas as pd
 from datetime import datetime
 from google.cloud import storage
 from dotenv import load_dotenv
+import re
+
+
+def _sanitize_path_component(value, default="sin_empresa"):
+    s = str(value or "").strip()
+    if not s:
+        return default
+    s = re.sub(r"[\\/]+", "-", s)
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^A-Za-z0-9._-]", "", s)
+    return s or default
 
 def obtener_mes_año_real(archivo, sistema):
     try:
@@ -34,11 +45,20 @@ def obtener_mes_año_real(archivo, sistema):
         if not col_fecha: col_fecha = next((c for c, norm in cols_norm.items() if 'fecha' in norm), None)
         
         if col_fecha and col_fecha in df.columns:
-            try:
-                # Forzar dayfirst=True para reportes mexicanos (DD/MM/YYYY)
+            if sistema == 'Supramax':
+                fechas_validas = pd.to_datetime(
+                    df[col_fecha],
+                    format='%Y/%m/%d %H:%M:%S',
+                    errors='coerce'
+                ).dropna()
+            elif sistema == 'Edenred':
                 fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', dayfirst=True).dropna()
-            except Exception:
-                fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', infer_datetime_format=True, dayfirst=True).dropna()
+            else:
+                try:
+                    # Forzar dayfirst=True para reportes mexicanos (DD/MM/YYYY)
+                    fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', dayfirst=True).dropna()
+                except Exception:
+                    fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', infer_datetime_format=True, dayfirst=True).dropna()
                 
             if not fechas_validas.empty:
                 fecha_frecuente = fechas_validas.mode().iloc[0]
@@ -48,7 +68,7 @@ def obtener_mes_año_real(archivo, sistema):
         
     return None, None
 
-def subir_y_borrar_local(archivo_local, sistema):
+def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=None):
     load_dotenv()
     project_id = os.getenv('GCP_PROJECT_ID')
     bucket_name = os.getenv('GCP_BUCKET_RESPALDOS', f"{project_id}-respaldos-rpa")
@@ -64,8 +84,13 @@ def subir_y_borrar_local(archivo_local, sistema):
         # Obtenemos el nombre ORIGINAL del archivo (ej. g00L16072.234.csv) SIN timestamps!
         nombre_original = os.path.basename(archivo_local)
         
-        # Extraer mes y año real leyendo el archivo
-        anio, mes = obtener_mes_año_real(archivo_local, sistema)
+        # Si el scraper ya sabe el periodo correcto, confiar en ese dato.
+        # Esto evita ambigüedades en CSVs de Pase con cortes que cruzan meses.
+        if year and month:
+            anio, mes = str(year), f"{int(month):02d}"
+        else:
+            # Extraer mes y año real leyendo el archivo
+            anio, mes = obtener_mes_año_real(archivo_local, sistema)
         if not anio or not mes:
             # Fallback a la fecha actual si el archivo está vacío o roto
             dt = datetime.now()
@@ -77,7 +102,11 @@ def subir_y_borrar_local(archivo_local, sistema):
         with open(archivo_local, "rb") as f:
             digest = hashlib.sha256(f.read()).hexdigest()[:12]
         nombre_limpio = f"{sistema.lower()}_{digest}_{nombre_original}"
-        ruta_gcs = f"{sistema}/{anio}/{mes}/{nombre_limpio}"
+        if empresa:
+            empresa_dir = _sanitize_path_component(empresa)
+            ruta_gcs = f"{sistema}/{empresa_dir}/{anio}/{mes}/{nombre_limpio}"
+        else:
+            ruta_gcs = f"{sistema}/{anio}/{mes}/{nombre_limpio}"
         
         print(f"☁️ Subiendo a la nube: gs://{bucket_name}/{ruta_gcs}")
         blob = bucket.blob(ruta_gcs)

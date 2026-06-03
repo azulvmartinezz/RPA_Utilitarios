@@ -2,6 +2,7 @@ import os
 import time
 import re
 import datetime
+import json
 from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -22,33 +23,95 @@ _MESES_ES = {
     'SEPTIEMBRE': 9, 'OCTUBRE': 10, 'NOVIEMBRE': 11, 'DICIEMBRE': 12
 }
 
-def _periodo_en_rango(texto, meses_objetivo):
-    """True si el periodo de facturación cubre al menos uno de los meses objetivo."""
+_CLIENT_MAP_PATH = os.path.join(os.getcwd(), "descargas_temporales", "pase_client_map.json")
+
+
+def _extraer_numero_cliente(texto):
+    match = re.search(r'(?:NÚMERO|NUMERO)\s+DE\s+CLIENTE\s*:\s*(\d+)', str(texto or ""), re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _extraer_numero_cliente_archivo(path_archivo):
+    nombre = os.path.basename(str(path_archivo or ""))
+    match = re.match(r'g\d+[A-Z](\d+)\.\d+\.csv$', nombre, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _cargar_mapa_clientes():
+    try:
+        with open(_CLIENT_MAP_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and "by_number" in data:
+            by_number = {
+                str(k): str(v)
+                for k, v in (data.get("by_number") or {}).items()
+                if k and v
+            }
+            by_slot = {
+                str(k): str(v)
+                for k, v in (data.get("by_slot") or {}).items()
+                if k and v
+            }
+            return {"by_number": by_number, "by_slot": by_slot}
+
+        # Compatibilidad con el formato anterior: {"53089": "PETRO SMART ..."}
+        by_number = {str(k): str(v) for k, v in data.items() if k and v}
+        return {"by_number": by_number, "by_slot": {}}
+    except Exception:
+        return {"by_number": {}, "by_slot": {}}
+
+
+def _guardar_mapa_clientes(mapa):
+    try:
+        os.makedirs(os.path.dirname(_CLIENT_MAP_PATH), exist_ok=True)
+        with open(_CLIENT_MAP_PATH, "w", encoding="utf-8") as fh:
+            json.dump(mapa, fh, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception as e:
+        print(f"⚠️ No se pudo guardar el mapa local de clientes Pase: {e}")
+
+
+def _nombre_empresa_pase(texto):
+    lineas = [ln.strip() for ln in str(texto or "").splitlines() if ln.strip()]
+    if not lineas:
+        return "sin_empresa"
+    if len(lineas) >= 2 and (
+        lineas[0].upper().startswith("NÚMERO DE CLIENTE")
+        or lineas[0].upper().startswith("NUMERO DE CLIENTE")
+    ):
+        return lineas[1]
+    return lineas[0]
+
+
+def _mes_objetivo_desde_periodo(texto, meses_objetivo):
+    """Devuelve el primer mes objetivo cubierto por el periodo mostrado en Pase."""
     t = texto.upper()
     years = re.findall(r'\b(\d{4})\b', t)
     if not years:
-        return False
+        return None
     end_year = int(years[-1])
 
     match_end = re.search(r'(\w+)\s+DEL\s+' + str(end_year), t)
     if not match_end:
-        return False
+        return None
     end_month = _MESES_ES.get(match_end.group(1))
     if not end_month:
-        return False
+        return None
 
     match_start = re.search(r'DEL\s+\d+\s+(?:DE\s+)?(\w+)', t)
     start_month = _MESES_ES.get(match_start.group(1)) if match_start else None
     if not start_month:
-        # Período de mes calendario (ej: "DEL 01 AL 30 DE MARZO DEL 2026")
         start_month = end_month
 
     start_year = end_year if start_month <= end_month else end_year - 1
 
-    for ty, tm in meses_objetivo:
+    for ty, tm in sorted(meses_objetivo):
         if (start_year, start_month) <= (ty, tm) <= (end_year, end_month):
-            return True
-    return False
+            return ty, tm
+    return None
+
+def _periodo_en_rango(texto, meses_objetivo):
+    """True si el periodo de facturación cubre al menos uno de los meses objetivo."""
+    return _mes_objetivo_desde_periodo(texto, meses_objetivo) is not None
 
 
 def solve_recaptcha(sitekey, url):
@@ -281,6 +344,7 @@ def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
 
 def main(backfill_mode=False, meses_objetivo=None, start_from=0):
     print("Iniciando RPA para Pase...")
+    mapa_clientes = _cargar_mapa_clientes()
     
     if not TWOCAPTCHA_API_KEY:
         print("ERROR: Por favor agrega tu TWOCAPTCHA_API_KEY al archivo .env")
@@ -375,11 +439,32 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                     
                     if token:
                         print("Inyectando token en la página...")
-                        # Insertar en el textarea oculto
-                        driver.execute_script(
-                            "document.getElementById('g-recaptcha-response').innerHTML = arguments[0];",
-                            token,
-                        )
+                        # Esperar e inyectar de forma robusta por ID o por Name, reintentando si no aparece de inmediato
+                        token_inyectado = False
+                        for _ in range(10):
+                            el_exists = driver.execute_script(
+                                """
+                                var el = document.getElementById('g-recaptcha-response');
+                                if (!el) {
+                                    var els = document.getElementsByName('g-recaptcha-response');
+                                    if (els && els.length > 0) el = els[0];
+                                }
+                                if (el) {
+                                    el.innerHTML = arguments[0];
+                                    el.value = arguments[0];
+                                    return true;
+                                }
+                                return false;
+                                """,
+                                token,
+                            )
+                            if el_exists:
+                                token_inyectado = True
+                                break
+                            time.sleep(1)
+                        
+                        if not token_inyectado:
+                            print("⚠️ Advertencia: No se encontró el campo g-recaptcha-response para inyectar el token.")
                         time.sleep(1)
                         
                         # Dato vital: Pase requiere que ejecutemos el callback del captcha
@@ -396,8 +481,12 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                 
             # 3. Clic en Entrar
             print("Haciendo clic en Entrar...")
-            # El botón no tiene ID fácil, lo ubicamos por el span que dice 'Entrar'
-            continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[text()='Entrar']]")))
+            # Ubicar el botón "Entrar" usando XPATHs alternativos para mayor tolerancia a variaciones
+            try:
+                continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[text()='Entrar']]")))
+            except Exception:
+                print("⚠️ No se encontró por span[text()='Entrar'], intentando XPATH alternativo con contains...")
+                continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Entrar')]")))
             continue_btn.click()
             
             # Esperar a que cargue la pantalla de selección de cliente
@@ -417,6 +506,22 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
             
             if num_clientes > 0 and indice_actual < num_clientes:
                 print(f"Seleccionando cliente {indice_actual + 1} de {num_clientes}...")
+                empresa_actual = opciones[indice_actual].text.strip()
+                numero_cliente_actual = _extraer_numero_cliente(empresa_actual)
+                empresa_limpia = _nombre_empresa_pase(empresa_actual)
+                if numero_cliente_actual and empresa_limpia != "sin_empresa":
+                    mapa_clientes["by_number"][numero_cliente_actual] = empresa_limpia
+                    mapa_clientes["by_slot"][str(indice_actual + 1)] = empresa_limpia
+                    _guardar_mapa_clientes(mapa_clientes)
+                elif empresa_limpia == "sin_empresa":
+                    empresa_limpia = mapa_clientes["by_slot"].get(str(indice_actual + 1), "sin_empresa")
+                    if empresa_limpia != "sin_empresa":
+                        print(
+                            f"🔁 Empresa inferida desde posición local del selector "
+                            f"({indice_actual + 1}): {empresa_limpia}"
+                        )
+                print(f"Cliente seleccionado: {empresa_actual}")
+                print(f"Empresa usada para BQ/GCS: {empresa_limpia}")
                 driver.execute_script("arguments[0].click();", opciones[indice_actual])
                 time.sleep(1)
 
@@ -456,6 +561,8 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                 print(f"Modalidad detectada: {modalidad}")
 
                 try:
+                    periodo_por_archivo = {}
+
                     if modalidad == "PREPAGO":
                         _descargar_prepago(driver, wait, backfill_mode, meses_objetivo)
                     elif modalidad not in ("POSPAGO",):
@@ -488,6 +595,10 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                                     time.sleep(0.5)
                                     continue
                                 print(f"  Periodo {i+1}/{n_periodos}: {texto}")
+                                codigo_match = re.match(r"\s*(\d+)-", texto)
+                                mes_bucket = _mes_objetivo_desde_periodo(texto, meses_objetivo or [])
+                                if codigo_match and mes_bucket:
+                                    periodo_por_archivo[codigo_match.group(1)] = mes_bucket
                                 opciones_iter[i].click()
                                 time.sleep(6)
                                 btn_csv_i = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
@@ -538,8 +649,17 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                     if archivos_csv:
                         print(f"🚀 Se encontraron {len(archivos_csv)} archivo(s) CSV. Mandando a la aduana de BigQuery...")
                         for archivo in archivos_csv:
+                            empresa_archivo = empresa_limpia
+                            numero_cliente_archivo = _extraer_numero_cliente_archivo(archivo)
+                            if empresa_archivo == "sin_empresa" and numero_cliente_archivo:
+                                empresa_archivo = mapa_clientes["by_number"].get(numero_cliente_archivo, "sin_empresa")
+                                if empresa_archivo != "sin_empresa":
+                                    print(
+                                        f"🔁 Empresa inferida desde mapa local para cliente "
+                                        f"{numero_cliente_archivo}: {empresa_archivo}"
+                                    )
                             try:
-                                df_limpio = bq_ingestion.procesar_pase(archivo)
+                                df_limpio = bq_ingestion.procesar_pase(archivo, empresa=empresa_archivo)
                                 if df_limpio is not None:
                                     bq_ingestion.ingest_to_bigquery(df_limpio)
                             except Exception as e:
@@ -552,7 +672,22 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                                 if raiz_proyecto not in sys.path:
                                     sys.path.append(raiz_proyecto)
                                 import gcs_uploader
-                                gcs_uploader.subir_y_borrar_local(archivo, 'Pase')
+                                year_override = None
+                                month_override = None
+                                archivo_base = os.path.basename(archivo)
+                                codigo_archivo = re.search(r"\.(\d+)\.csv$", archivo_base, re.IGNORECASE)
+                                if codigo_archivo and codigo_archivo.group(1) in periodo_por_archivo:
+                                    year_override, month_override = periodo_por_archivo[codigo_archivo.group(1)]
+                                elif backfill_mode and meses_objetivo and len(set(meses_objetivo)) == 1:
+                                    year_override, month_override = meses_objetivo[0]
+
+                                gcs_uploader.subir_y_borrar_local(
+                                    archivo,
+                                    'Pase',
+                                    empresa=empresa_archivo,
+                                    year=year_override,
+                                    month=month_override,
+                                )
                     else:
                         print("⚠️ No se encontraron archivos CSV en la carpeta temporal.")
 

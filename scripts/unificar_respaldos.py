@@ -13,10 +13,61 @@ if PROJECT_ROOT not in sys.path:
 
 def _normalize_eco(val):
     s = str(val).strip().upper().replace(' ', '').replace('.', '')
-    m = re.match(r'^(AU|CA)-?(\d+)$', s)
+    # Solo aceptar ECOs canónicos AU/CA con número. Permite sufijos o anotaciones como (JW) usando (?!\d)
+    m = re.match(r'^(AU|CA)-?(\d{1,3})(?!\d)', s)
     if m:
         return f"{m.group(1)}-{m.group(2).zfill(3)}"
     return s
+
+
+def _parse_pase_fecha(series):
+    texto = series.astype(str).str.strip()
+    serie = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+
+    # 1) Formato ISO mexicano visto en Pase: YYYY/MM/DD
+    mask_ymd = texto.str.match(r"^\d{4}/\d{2}/\d{2}$", na=False)
+    if mask_ymd.any():
+        serie.loc[mask_ymd] = pd.to_datetime(texto.loc[mask_ymd], format="%Y/%m/%d", errors="coerce")
+
+    # 2) Para el resto, usar el mismo criterio operativo que BQ: dayfirst=True
+    restantes = serie.isna()
+    if restantes.any():
+        serie.loc[restantes] = pd.to_datetime(texto.loc[restantes], dayfirst=True, errors="coerce")
+
+    # 3) Último intento genérico por si aparece alguna variante rara
+    restantes = serie.isna()
+    if restantes.any():
+        serie.loc[restantes] = pd.to_datetime(texto.loc[restantes], errors="coerce")
+
+    return serie
+
+
+def _extraer_periodo_desde_ruta_pase(blob_name):
+    match = re.search(r'/(\d{4})/(\d{2})/', blob_name)
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _extraer_empresa_desde_ruta_pase(blob_name):
+    match = re.search(r'/(\d{4})/(\d{2})/', blob_name)
+    if not match:
+        return "Legacy"
+    idx = match.start()
+    return blob_name[:idx]
+
+
+def _dedupe_name_pase(nombre_blob):
+    nombre = os.path.basename(nombre_blob)
+    match = re.match(r'^pase_[0-9a-f]{12}_(.+)$', nombre, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return nombre
+
+
+def _is_new_pase_layout(blob_name):
+    # Nuevo layout: Pase/<EMPRESA>/YYYY/MM/archivo
+    return re.match(r"^Pase/[^/]+/\d{4}/\d{2}/", blob_name) is not None
 
 
 def _limpiar_edenred(df):
@@ -48,6 +99,7 @@ def unificar_respaldos():
     parser.add_argument("--supramax", action="store_true", help="Solo unificar Supramax")
     parser.add_argument("--edenred", action="store_true", help="Solo unificar Edenred")
     parser.add_argument("--pase", action="store_true", help="Solo unificar Pase")
+    parser.add_argument("--year", type=int, help="Filtrar respaldos por año (ej. 2026)")
     args = parser.parse_args()
     
     run_all = not (args.supramax or args.edenred or args.pase)
@@ -94,11 +146,52 @@ def unificar_respaldos():
     if args.pase or run_all:
         blobs = list(gcs_bucket.list_blobs(prefix='Pase/'))
         blobs_csv = [b for b in blobs if b.name.endswith('.csv')]
+        if args.year:
+            year_fragment = f"/{args.year}/"
+            blobs_csv = [b for b in blobs_csv if year_fragment in b.name]
         if blobs_csv:
             print(f"☁️  Descargando y unificando {len(blobs_csv)} archivos de Pase...")
             lista_pase = []
+            blobs_elegidos = {}
             with tempfile.TemporaryDirectory() as tmpdir:
                 for blob in blobs_csv:
+                    bucket_year, bucket_month = _extraer_periodo_desde_ruta_pase(blob.name)
+                    empresa_prefix = _extraer_empresa_desde_ruta_pase(blob.name)
+                    dedupe_nombre = _dedupe_name_pase(blob.name)
+                    
+                    # Si el archivo es genérico (como cruces.csv de prepago), incluimos la empresa y el periodo en la clave
+                    # para evitar que colisionen las descargas de distintas empresas o distintos meses.
+                    # Si es único (pospago con número de cliente y periodo), la clave es solo el nombre del archivo
+                    # para evitar descargar el mismo periodo duplicado que esté respaldado en carpetas de meses distintos
+                    # o en layouts distintos (legacy vs nuevo).
+                    is_generic = "cruces.csv" in dedupe_nombre.lower()
+                    if is_generic:
+                        dedupe_key = (empresa_prefix, bucket_year, bucket_month, dedupe_nombre)
+                    else:
+                        dedupe_key = (dedupe_nombre,)
+
+                    existente = blobs_elegidos.get(dedupe_key)
+                    if existente is None:
+                        blobs_elegidos[dedupe_key] = blob
+                    else:
+                        existente_new = _is_new_pase_layout(existente.name)
+                        actual_new = _is_new_pase_layout(blob.name)
+                        # Preferir la ruta nueva con empresa sobre el layout legacy Pase/YYYY/MM
+                        if actual_new and not existente_new:
+                            print(
+                                f"  ↪️ Archivo Pase duplicado: se prefiere layout nuevo "
+                                f"{blob.name} sobre {existente.name}"
+                            )
+                            blobs_elegidos[dedupe_key] = blob
+                        else:
+                            print(
+                                f"  ↪️ Archivo Pase duplicado por respaldo mensual, se omite: "
+                                f"{blob.name} (ya considerado desde {existente.name})"
+                            )
+
+                for dedupe_key, blob in blobs_elegidos.items():
+                    # Re-extraer el periodo correcto desde la ruta del blob elegido
+                    blob_year, blob_month = _extraer_periodo_desde_ruta_pase(blob.name)
                     nombre = os.path.basename(blob.name)
                     local_path = os.path.join(tmpdir, nombre)
                     blob.download_to_filename(local_path)
@@ -116,15 +209,23 @@ def unificar_respaldos():
 
                         df_std = pd.DataFrame()
                         df_std['ECO'] = df[col_eco].astype(str).str.strip() if col_eco else None
-                        df_std['Fecha'] = df[col_fecha] if col_fecha else None
+                        df_std['Fecha'] = _parse_pase_fecha(df[col_fecha]) if col_fecha else None
                         if col_importe:
                             df_std['Importe'] = pd.to_numeric(df[col_importe].astype(str).str.replace(r'[$,]','',regex=True), errors='coerce').abs()
                         df_std['Archivo_Origen'] = nombre
+                        df_std = df_std.dropna(subset=['Importe', 'Fecha', 'ECO'])
+                        df_std['ECO'] = df_std['ECO'].apply(_normalize_eco)
+                        # En Pase no filtramos por mes de la carpeta para no descartar cruces tardíos
+                        if blob_year:
+                            df_std = df_std[df_std['Fecha'].dt.year == blob_year]
+                        if args.year:
+                            df_std = df_std[df_std['Fecha'].dt.year == args.year]
                         lista_pase.append(df_std)
                     except Exception as e:
                         print(f"  ⚠️ Error en {nombre}: {e}")
             if lista_pase:
-                pd.concat(lista_pase, ignore_index=True).to_csv("CONSOLIDADO_CRUDO_PASE.csv", index=False, encoding='utf-8-sig')
+                df_pase_final = pd.concat(lista_pase, ignore_index=True)
+                df_pase_final.to_csv("CONSOLIDADO_CRUDO_PASE.csv", index=False, encoding='utf-8-sig')
                 print(f"✅ Creado: CONSOLIDADO_CRUDO_PASE.csv")
         else:
             print("⚠️ No hay archivos de Pase.")

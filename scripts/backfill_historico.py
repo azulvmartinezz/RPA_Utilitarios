@@ -63,7 +63,7 @@ def _mes_str(year, month):
 # ---------------------------------------------------------------------------
 # SUPRAMAX
 # ---------------------------------------------------------------------------
-def backfill_supramax(cuenta_filter=None, meses_filter=None):
+def backfill_supramax(cuenta_filter=None, cuentas_excluir=None, meses_filter=None):
     print("\n" + "="*60)
     print("🚗 BACKFILL SUPRAMAX")
     print("="*60)
@@ -82,13 +82,24 @@ def backfill_supramax(cuenta_filter=None, meses_filter=None):
             return
         print(f"🎯 Filtrando solo cuenta(s): {[c['Usuario'] for c in credenciales]}")
 
+    # Excluir cuentas específicas si se solicitó
+    if cuentas_excluir:
+        excluidas_upper = {c.upper() for c in cuentas_excluir}
+        credenciales = [c for c in credenciales if c['Usuario'].upper() not in excluidas_upper]
+        if not credenciales:
+            print(f"❌ Después de excluir cuentas, no queda ninguna cuenta Supramax por procesar.")
+            return
+        print(f"🚫 Excluyendo cuenta(s): {sorted(excluidas_upper)}")
+        print(f"🎯 Procesando cuenta(s) restantes: {[c['Usuario'] for c in credenciales]}")
+
     # Determinar meses a procesar
     meses_a_usar = meses_filter if meses_filter else MESES_SUPRAMAX
 
     # Borrar solo los meses que se van a cargar.
     # IMPORTANTE: si se filtra por cuenta, NO borramos — la cuenta nunca subió datos
     # y borrar el mes completo eliminaría registros de otras cuentas que sí procesaron bien.
-    if not cuenta_filter:
+    corrida_parcial = bool(cuenta_filter or cuentas_excluir)
+    if not corrida_parcial:
         for year, month in meses_a_usar:
             bq_ingestion.delete_month("Supramax", year, month)
     else:
@@ -99,7 +110,7 @@ def backfill_supramax(cuenta_filter=None, meses_filter=None):
     for acc in credenciales:
         fallos_cuenta = process_account(
             acc['Usuario'], acc['Contraseña'],
-            meses_override=meses, meses_meta=meses_a_usar
+            meses_override=meses, meses_meta=meses_a_usar, empresa=acc.get('Empresa') or acc['Usuario']
         )
         if fallos_cuenta:
             for (y, m) in fallos_cuenta:
@@ -138,21 +149,23 @@ def backfill_edenred(meses_filter=None):
 # ---------------------------------------------------------------------------
 # PASE
 # ---------------------------------------------------------------------------
-def backfill_pase():
+def backfill_pase(meses_filter=None):
     print("\n" + "="*60)
     print("🛣️  BACKFILL PASE")
     print("="*60)
 
+    meses_a_usar = meses_filter if meses_filter else MESES_PASE
+
     try:
-        for year, month in MESES_PASE:
+        for year, month in meses_a_usar:
             bq_ingestion.delete_month("Pase", year, month)
 
         from scrapers.pase_rpa import main as pase_main
-        pase_main(backfill_mode=True, meses_objetivo=MESES_PASE)
+        pase_main(backfill_mode=True, meses_objetivo=meses_a_usar)
         print("\n✅ Backfill Pase completado.")
     except Exception as e:
         print(f"❌ Error en Pase: {e}")
-        for year, month in MESES_PASE:
+        for year, month in meses_a_usar:
             FALLOS.append(("Pase", "N/A", f"{year}-{month:02d}"))
 
 
@@ -161,13 +174,31 @@ def backfill_pase():
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Backfill Histórico 2026")
+    parser = argparse.ArgumentParser(description="Backfill Histórico")
     parser.add_argument("--supramax", action="store_true", help="Correr solo Supramax")
     parser.add_argument("--edenred", action="store_true", help="Correr solo Edenred")
     parser.add_argument("--pase", action="store_true", help="Correr solo Pase")
     parser.add_argument("--cuenta", type=str, default=None, help="Filtrar por nombre de cuenta (ej: AEROSERVICIOS)")
+    parser.add_argument("--excluir-cuentas", type=str, default=None, help="Excluir cuentas Supramax por usuario, separadas por coma (ej: AENEKA,AEROSERVICIOS)")
     parser.add_argument("--mes", type=str, default=None, help="Filtrar por mes específico (ej: 2026-01)")
+    parser.add_argument("--year", type=int, default=2026, help="Año del backfill (ej: 2025 o 2026)")
     args = parser.parse_args()
+
+    # Configurar variable de entorno para filtrar ingesta por año
+    os.environ['BACKFILL_YEAR'] = str(args.year)
+    os.environ.pop('BACKFILL_MONTH', None)
+
+    # Si --year es 2025, cargamos los 12 meses. Si es 2026, Ene-Abr.
+    if args.year == 2025:
+        meses_por_defecto = [(2025, i) for i in range(1, 13)]
+        periodo_desc = "Enero – Diciembre 2025"
+    else:
+        meses_por_defecto = [(args.year, 1), (args.year, 2), (args.year, 3), (args.year, 4)]
+        periodo_desc = "Enero – Abril 2026"
+
+    MESES_SUPRAMAX = meses_por_defecto
+    MESES_EDENRED  = meses_por_defecto
+    MESES_PASE     = meses_por_defecto
 
     # Si no se especifica ningún sistema, se corren todos
     run_all = not (args.supramax or args.edenred or args.pase)
@@ -178,22 +209,29 @@ if __name__ == "__main__":
         try:
             y, m = args.mes.split("-")
             meses_filter = [(int(y), int(m))]
+            os.environ['BACKFILL_MONTH'] = args.mes
             print(f"🗓️  Filtrando solo mes: {args.mes}")
         except:
             print(f"❌ Formato de --mes inválido. Usa YYYY-MM, ej: 2026-01")
             exit(1)
 
-    print("🔄 INICIANDO BACKFILL HISTÓRICO 2026")
-    print("Periodo:  Enero – Abril 2026\n")
+    cuentas_excluir = None
+    if args.excluir_cuentas:
+        cuentas_excluir = [c.strip() for c in args.excluir_cuentas.split(",") if c.strip()]
+        if cuentas_excluir:
+            print(f"🚫 Excluyendo cuentas Supramax: {cuentas_excluir}")
+
+    print(f"🔄 INICIANDO BACKFILL HISTÓRICO {args.year}")
+    print(f"Periodo:  {periodo_desc}\n")
 
     if args.supramax or run_all:
-        backfill_supramax(cuenta_filter=args.cuenta, meses_filter=meses_filter)
+        backfill_supramax(cuenta_filter=args.cuenta, cuentas_excluir=cuentas_excluir, meses_filter=meses_filter)
     
     if args.edenred or run_all:
         backfill_edenred(meses_filter=meses_filter)
         
     if args.pase or run_all:
-        backfill_pase()
+        backfill_pase(meses_filter=meses_filter)
 
     # ---------------------------------------------------------------------------
     # RESUMEN FINAL

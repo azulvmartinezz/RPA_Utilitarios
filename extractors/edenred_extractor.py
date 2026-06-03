@@ -1,6 +1,8 @@
 import os
 import sys
 import time
+import re
+import json
 
 # Añadir el directorio raíz al path para que encuentre 'bigquery' y otros módulos
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -14,6 +16,45 @@ load_dotenv()
 CLIENT_ID = os.getenv('GRAPH_CLIENT_ID')
 TENANT_ID = os.getenv('GRAPH_TENANT_ID')
 EMAIL_CUENTA = os.getenv('DESTINATARIO_EMAIL')
+
+
+def _manifest_path():
+    return os.path.join(os.getcwd(), "descargas_temporales", "edenred_report_manifest.json")
+
+
+def _load_manifest():
+    path = _manifest_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _save_manifest(data):
+    path = _manifest_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=True, indent=2)
+
+
+def _pop_pending_empresa(manifest):
+    pending = manifest.get("pending_reports", [])
+    if not pending:
+        return None
+    item = pending.pop(0)
+    manifest["pending_reports"] = pending
+    _save_manifest(manifest)
+    return item.get("empresa")
+
+
+def _empresa_para_adjunto(mensaje, adjunto_name, manifest):
+    key = f"attachment::{adjunto_name}"
+    if key in manifest:
+        return manifest[key].get("empresa")
+    return _pop_pending_empresa(manifest)
 
 def main(n_expected=1):
     if not CLIENT_ID or not TENANT_ID:
@@ -75,7 +116,6 @@ def main(n_expected=1):
         mensajes = sorted(
             [m for m in candidatos if m.has_attachments],
             key=lambda m: m.received,
-            reverse=True,
         )
         if n_expected and len(mensajes) > n_expected:
             print(f"ℹ️ Hay {len(mensajes)} correos sin leer; se procesarán solo los {n_expected} más recientes.")
@@ -95,6 +135,7 @@ def main(n_expected=1):
         else:
             print(f"⚠️ Tiempo de espera agotado, pero se procesarán los {len(mensajes)} correos encontrados.")
 
+    manifest = _load_manifest()
     encontrados = 0
     total_importe = 0.0
     for mensaje in mensajes:
@@ -114,10 +155,14 @@ def main(n_expected=1):
                     ruta_guardado = os.path.join(descargas_dir, adjunto.name)
                     print(f"📥 Descargando adjunto: {adjunto.name} ...")
                     adjunto.save(location=descargas_dir)
+                    empresa = _empresa_para_adjunto(mensaje, adjunto.name, manifest)
+                    if empresa:
+                        manifest[f"attachment::{adjunto.name}"] = {"empresa": empresa}
+                        _save_manifest(manifest)
                     
                     print("🚀 Mandando a la aduana de BigQuery...")
                     try:
-                        df_limpio = bq_ingestion.procesar_edenred(ruta_guardado)
+                        df_limpio = bq_ingestion.procesar_edenred(ruta_guardado, empresa=empresa)
                         if df_limpio is not None:
                             suma_archivo = df_limpio['Importe'].sum()
                             total_importe += suma_archivo
@@ -138,7 +183,7 @@ def main(n_expected=1):
                             if raiz_proyecto not in sys.path:
                                 sys.path.append(raiz_proyecto)
                             import gcs_uploader
-                            gcs_uploader.subir_y_borrar_local(ruta_guardado, 'Edenred')
+                            gcs_uploader.subir_y_borrar_local(ruta_guardado, 'Edenred', empresa=empresa)
             
             encontrados += 1
 
