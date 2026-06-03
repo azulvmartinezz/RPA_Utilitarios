@@ -26,6 +26,8 @@ Scripts desarrollados para poblar la base de datos con históricos de 2025/2026 
 | **Backfill Histórico 2026** | `scripts/backfill_historico.py` | Permite recargar meses específicos del 2026 para cualquiera de los tres sistemas operativos (`--pase`, `--supramax`, `--edenred`). | `python scripts/backfill_historico.py --pase --mes 2026-01` |
 | **Unificar Respaldos** | `scripts/unificar_respaldos.py` | Descarga todos los archivos del bucket de GCS y genera archivos consolidados locales de Edenred, Supramax y Pase. | `python scripts/unificar_respaldos.py` |
 | **Migrar a GCS** | `scripts/migrar_respaldos_a_gcs.py` | Sube archivos de respaldo locales de forma masiva a la estructura de carpetas en Google Cloud Storage. | `python scripts/migrar_respaldos_a_gcs.py` |
+| **Conciliar contra Manual** | `scripts/conciliar_contra_manual.py` | Compara la base de datos de BigQuery contra el archivo de Excel de control interno manual provisto por administración. | `python scripts/conciliar_contra_manual.py` |
+
 
 
 ---
