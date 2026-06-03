@@ -72,29 +72,49 @@ def main(n_expected=1):
     # Inicializar cuenta con los permisos delegados
     account = Account(credentials, auth_flow='authorization', tenant_id=TENANT_ID, token_backend=token_backend)
     
-    # --- PRIMERA VEZ (Autenticación Interactiva) ---
-    if not account.is_authenticated:
+    # Definir la función de consentimiento
+    def my_consent(consent_url):
         print("\n" + "="*50)
-        print("🔐 PRIMERA VEZ: AUTENTICACIÓN REQUERIDA")
+        print("1. Abre este link en tu navegador:")
+        print(consent_url)
+        print("\n2. Inicia sesión y llegarás a una página en blanco.")
+        print("3. Copia toda la URL larguísima de arriba.")
+        print("4. Crea un archivo llamado 'url.txt' en esta misma carpeta, pega ahí la URL y GUÁRDALO.")
+        print("="*50)
+        input("Una vez guardado el archivo url.txt, presiona ENTER aquí...")
+        try:
+            with open("url.txt", "r") as f:
+                return f.read().strip()
+        except Exception as e:
+            print("❌ No se pudo leer url.txt. Asegúrate de crearlo en la carpeta correcta.")
+            return ""
+
+    # Intenta validar el token existente haciendo una llamada simple de prueba a Microsoft Graph.
+    # Si falla por expiración o revocación (invalid_grant), forzará la reautenticación interactiva.
+    token_valido = False
+    if account.is_authenticated:
+        try:
+            # Hacer una llamada rápida para verificar si el token funciona
+            mailbox = account.mailbox()
+            list(mailbox.get_messages(limit=1))
+            token_valido = True
+        except Exception as e:
+            print(f"⚠️ El token existente no es válido o expiró ({e}). Reautenticando...")
+            if os.path.exists('o365_token.txt'):
+                try: os.remove('o365_token.txt')
+                except: pass
+            # Volver a instanciar el backend y la cuenta para limpiar memoria
+            token_backend = FileSystemTokenBackend(token_path='.', token_filename='o365_token.txt')
+            account = Account(credentials, auth_flow='authorization', tenant_id=TENANT_ID, token_backend=token_backend)
+
+    # --- AUTENTICACIÓN REQUERIDA ---
+    if not token_valido or not account.is_authenticated:
+        print("\n" + "="*50)
+        print("🔐 AUTENTICACIÓN REQUERIDA (Microsoft Office 365)")
         print("="*50)
         print(f"Se te pedirá que inicies sesión en Microsoft con la cuenta: {EMAIL_CUENTA}")
         print("Solo tendrás que hacerlo una vez. El bot guardará un token permanente.")
-        def my_consent(consent_url):
-            print("\n" + "="*50)
-            print("1. Abre este link en tu navegador:")
-            print(consent_url)
-            print("\n2. Inicia sesión y llegarás a una página en blanco.")
-            print("3. Copia toda la URL larguísima de arriba.")
-            print("4. Crea un archivo llamado 'url.txt' en esta misma carpeta, pega ahí la URL y GUÁRDALO.")
-            print("="*50)
-            input("Una vez guardado el archivo url.txt, presiona ENTER aquí...")
-            try:
-                with open("url.txt", "r") as f:
-                    return f.read().strip()
-            except Exception as e:
-                print("❌ No se pudo leer url.txt. Asegúrate de crearlo en la carpeta correcta.")
-                return ""
-
+        
         if not account.authenticate(scopes=['basic', 'message_all'], handle_consent=my_consent):
             print("❌ La autenticación falló o fue cancelada.")
             return

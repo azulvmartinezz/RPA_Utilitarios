@@ -407,7 +407,7 @@ def main():
         print(f"\n{'='*50}")
         print(f"🔄 PROCESANDO CUENTA {idx + 1} DE {len(credenciales)}")
         print(f"{'='*50}")
-        process_account(acc['Usuario'], acc['Contraseña'])
+        process_account(acc['Usuario'], acc['Contraseña'], empresa=acc.get('Empresa'))
         
     print("\n✅ Proceso global de Supramax finalizado.")
 

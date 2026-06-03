@@ -219,15 +219,15 @@ def main(meses_override=None):
 
                     # 11. Clic en "Reportes"
                     reportes_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Reportes') and contains(@href, 'MicrositioReportes')]")))
-                    reportes_menu.click()
+                    driver.execute_script("arguments[0].click();", reportes_menu)
 
                     # 12. Clic en "Resumen de Reportes"
                     resumen_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Resumen de Reportes')]")))
-                    resumen_menu.click()
+                    driver.execute_script("arguments[0].click();", resumen_menu)
 
                     # 13. Clic en "Reportes Financieros"
                     financieros_btn = wait.until(EC.element_to_be_clickable((By.ID, "ctl00_contenido_ucCategoriasReportes_lnkFinancieros")))
-                    financieros_btn.click()
+                    driver.execute_script("arguments[0].click();", financieros_btn)
                     time.sleep(5)
 
                     # 14. Buscar y hacer clic en DETALLE DE MOVIMIENTOS con JavaScript puro

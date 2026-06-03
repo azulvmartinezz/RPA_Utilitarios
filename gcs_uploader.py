@@ -54,11 +54,26 @@ def obtener_mes_año_real(archivo, sistema):
             elif sistema == 'Edenred':
                 fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', dayfirst=True).dropna()
             else:
-                try:
-                    # Forzar dayfirst=True para reportes mexicanos (DD/MM/YYYY)
-                    fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', dayfirst=True).dropna()
-                except Exception:
-                    fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', infer_datetime_format=True, dayfirst=True).dropna()
+                # Pase: Intentar formato YYYY/MM/DD primero (para pospago)
+                # y luego DD/MM/YYYY (para prepago)
+                texto = df[col_fecha].astype(str).str.strip()
+                serie = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+                
+                # 1) YYYY/MM/DD
+                mask_ymd = texto.str.match(r"^\d{4}/\d{2}/\d{2}$", na=False)
+                if mask_ymd.any():
+                    serie.loc[mask_ymd] = pd.to_datetime(
+                        texto.loc[mask_ymd], format="%Y/%m/%d", errors="coerce"
+                    )
+                
+                # 2) Restantes
+                restantes = serie.isna()
+                if restantes.any():
+                    serie.loc[restantes] = pd.to_datetime(
+                        texto.loc[restantes], dayfirst=True, errors="coerce"
+                    )
+                
+                fechas_validas = serie.dropna()
                 
             if not fechas_validas.empty:
                 fecha_frecuente = fechas_validas.mode().iloc[0]
