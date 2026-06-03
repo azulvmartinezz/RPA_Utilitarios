@@ -1,15 +1,16 @@
 # 🧭 Guía de Scripts de RPA Utilitarios
 
-Esta guía está diseñada para ayudar a la **Azul y al Gemini del futuro** a entender rápidamente qué hace cada script en esta carpeta, cómo ejecutarlo y qué resultados esperar. ¡Mantengamos el orden y la conciliación impecable!
+> [!NOTE]
+> Esta carpeta contiene los scripts complementarios de base de datos, backfill de datos históricos y conciliación. Para la ejecución mensual automática de producción, utiliza el [orquestador_maestro.py](file:///Users/azulvioleta/Downloads/RPA_Utilitarios/orquestador_maestro.py) en la raíz.
 
 ---
 
 ## 🏃‍♂️ 1. `backfill_historico.py`
-**El orquestador del pasado.**
-* **¿Qué hace?:** Realiza la descarga y carga histórica automatizada de datos antiguos (ej. 2025 o primeros meses de 2026).
+**El orquestador de históricos.**
+* **¿Qué hace?:** Realiza la descarga y carga histórica automatizada de meses pasados del 2026.
   * Lanza navegadores independientes en paralelo para **Supramax** y **Edenred**.
-  * Ejecuta la descarga de **Pase** secuencialmente (resolviendo captchas de forma manual o con 2Captcha si es necesario).
-  * Limpia automáticamente el periodo en BigQuery antes de cargar para evitar duplicados (idempotente).
+  * Ejecuta la descarga de **Pase** secuencialmente.
+  * Limpia automáticamente el periodo en BigQuery antes de cargar para evitar duplicados.
 * **Cómo se ejecuta:**
   ```bash
   # Correr todo el backfill por defecto de 2026 (Ene - Abr)
@@ -21,7 +22,20 @@ Esta guía está diseñada para ayudar a la **Azul y al Gemini del futuro** a en
 
 ---
 
-## 🗄️ 2. `unificar_respaldos.py`
+## 📊 2. `conciliacion_ecos_2025_vs_2026.py`
+**El conciliador analítico.**
+* **¿Qué hace?:** Genera el reporte comparativo estético de Excel (`comparativa_ecos_2025_vs_2026.xlsx`) cruzando las transacciones de BigQuery contra la tabla catálogo maestro `tbl_utilitarios_maestra`.
+  * Genera el desglose del mes seleccionado en 7 pestañas: Resumen General, Comparativa del Mes, Pase, Supramax, Edenred, Mantenimientos y Validación del Catálogo.
+  * Mapea de forma automática los identificadores de vehículos históricos (ej. recupera los nombres originales con `LZC` antes de normalizar).
+* **Cómo se ejecuta:**
+  ```bash
+  # Generar el reporte para el mes de Enero (1) o Mayo (5)
+  .venv/bin/python scripts/conciliacion_ecos_2025_vs_2026.py --mes 5
+  ```
+
+---
+
+## 🗄️ 3. `unificar_respaldos.py`
 **El consolidador local.**
 * **¿Qué hace?:** Descarga los archivos CSV y Excel de respaldos crudos que **ya están guardados en tu nube de Google Cloud Storage (GCS)** y los unifica en un solo archivo CSV local súper limpio.
   * Realiza una deduplicación avanzada en la nube para asegurar que si el mismo archivo pospago se respaldó dos veces por error, solo se procese una vez.
@@ -32,19 +46,6 @@ Esta guía está diseñada para ayudar a la **Azul y al Gemini del futuro** a en
   .venv/bin/python scripts/unificar_respaldos.py --pase --year 2026
   ```
 * **Qué genera:** Crea o actualiza archivos en la raíz del proyecto como `CONSOLIDADO_CRUDO_PASE.csv`.
-
----
-
-## 🔎 3. `comparar_pase_consolidado_vs_bq.py`
-**El auditor de confianza.**
-* **¿Qué hace?:** Compara línea por línea el archivo consolidado local CSV (`CONSOLIDADO_CRUDO_PASE.csv`) contra los registros que están cargados en **BigQuery** para un mes específico.
-  * Suma importes y cuenta transacciones agrupando por vehículo (`ECO`).
-  * Te muestra en pantalla el total del CSV, el total de BigQuery y **la diferencia exacta** al centavo, listando los vehículos donde existan discrepancias.
-* **Cómo se ejecuta:**
-  ```bash
-  # Auditar y comparar las cifras de Abril 2026 (solo vehículos canónicos)
-  .venv/bin/python scripts/comparar_pase_consolidado_vs_bq.py --year 2026 --month 4 --only-utilitarios
-  ```
 
 ---
 
@@ -69,74 +70,22 @@ Esta guía está diseñada para ayudar a la **Azul y al Gemini del futuro** a en
 
 ---
 
-## ☁️ 6. `descargar_archivos_gcs.py`
-**El explorador del bucket.**
-* **¿Qué hace?:** Descarga archivos de respaldo desde Google Cloud Storage a una carpeta local, con filtros opcionales por sistema, año, mes y empresa. Respeta la estructura de rutas del bucket (`Sistema/Empresa/YYYY/MM/archivo`).
-* **Cómo se ejecuta:**
+## 💾 6. `recuperar_pase_2025.py` & `recuperar_edenred_2025.py`
+**Los recuperadores de históricos 2025.**
+* **¿Qué hacen?:** Descargan todos los archivos históricos de 2025 correspondientes a Pase o Edenred desde GCS, aplican las reglas de limpieza y formateo necesarias (como el `index_col=False` y limpieza de espacios en Pase), y los cargan de forma masiva en BigQuery sin duplicados.
+* **Cómo se ejecutan:**
   ```bash
-  # Ver qué hay en GCS para Pase enero 2025 (sin descargar)
-  .venv/bin/python scripts/descargar_archivos_gcs.py --sistema Pase --year 2025 --mes 01 --solo-listar
+  # Recuperar todo Pase 2025
+  .venv/bin/python scripts/recuperar_pase_2025.py
 
-  # Descargar Pase de todo 2025
-  .venv/bin/python scripts/descargar_archivos_gcs.py --sistema Pase --year 2025
-
-  # Descargar solo una empresa y un mes
-  .venv/bin/python scripts/descargar_archivos_gcs.py --sistema Pase --empresa PETROIL --year 2025 --mes 01
+  # Recuperar todo Edenred 2025
+  .venv/bin/python scripts/recuperar_edenred_2025.py
   ```
-* **Qué genera:** Crea una carpeta `descargas_gcs/` (configurable con `--destino`) replicando la estructura del bucket.
-
----
-
-## 🔎 7. `diagnostico_ecos_enero.py`
-**El detective de unidades.**
-* **¿Qué hace?:** Compara los ECOs únicos de un mes entre dos años directamente en BigQuery. Identifica las unidades que aparecen en un año pero no en el otro — exactamente las ~80 de diferencia que brinca en el dashboard.
-* **Cómo se ejecuta:**
-  ```bash
-  # Comparar enero 2025 vs enero 2026 (valores default)
-  .venv/bin/python scripts/diagnostico_ecos_enero.py
-
-  # Con detalle de registros crudos de las unidades nuevas
-  .venv/bin/python scripts/diagnostico_ecos_enero.py --export-detalle
-
-  # Otro mes, ej. febrero
-  .venv/bin/python scripts/diagnostico_ecos_enero.py --mes 02
-  ```
-* **Qué genera:**
-  * `ecos_solo_2026_mes01.csv` — las ~80 unidades nuevas que aparecen en 2026 pero no en 2025
-  * `ecos_solo_2025_mes01.csv` — unidades que existían en 2025 pero no en 2026
-  * `comparativa_ecos_mes01_2025_vs_2026.csv` — todos los ECOs lado a lado con columna `presencia`
-  * `detalle_ecos_nuevos_2026_mes01.csv` — registros crudos de las unidades nuevas (solo con `--export-detalle`)
-
----
-
-## 🧷 8. `rastrear_ecos.py`
-**El trazador puntual.**
-* **¿Qué hace?:** Toma uno o varios ECOs concretos y te dice en qué meses aparecen, en qué sistema, con qué empresa y desde qué archivo origen. Puede consultar tanto `BigQuery` como un archivo local (`CONSOLIDADO_CRUDO_EDENRED.csv`, `Untitled-1.tsv`, etc.).
-* **Cómo se ejecuta:**
-  ```bash
-  # Consultar BigQuery y consolidado local para ECOs sospechosos
-  .venv/bin/python scripts/rastrear_ecos.py --ecos AU-004 AU-006 AU-009 AU-011
-
-  # Solo archivo local TSV sin encabezados
-  .venv/bin/python scripts/rastrear_ecos.py \
-    --solo-local \
-    --local-file Untitled-1.tsv \
-    --ecos AU-004 AU-006 AU-009 AU-011
-
-  # Filtrar a Edenred enero-abril 2026 y exportar resultados
-  .venv/bin/python scripts/rastrear_ecos.py \
-    --ecos AU-004 AU-006 AU-009 AU-011 \
-    --sistema Edenred \
-    --year-from 2026 \
-    --year-to 2026 \
-    --meses 1 2 3 4 \
-    --export-prefix rastreo_inactivos
-  ```
-* **Qué genera:** Si usas `--export-prefix`, crea `<prefijo>_bq.csv` y/o `<prefijo>_local.csv` en la raíz del proyecto.
 
 ---
 
 ### 💡 Tips para Azul y Gemini del Futuro:
-1. **¿Las cifras de Pase no cuadran?** Corre `unificar_respaldos.py --pase --year 2026` para actualizar el consolidado local y luego audítalo con `comparar_pase_consolidado_vs_bq.py` para ver exactamente qué vehículos tienen diferencia.
-2. **¿Brinca la cantidad de unidades entre años?** Corre `diagnostico_ecos_enero.py` para ver exactamente cuáles ECOs son nuevos o cuáles desaparecieron.
-3. **El entorno virtual:** Recuerda siempre anteponer `.venv/bin/python` al ejecutar los scripts para asegurar que usas las dependencias y credenciales de Google correctas del proyecto.
+
+> [!TIP]
+> **¿Las cifras de Pase no cuadran en BigQuery?** Corre `unificar_respaldos.py --pase --year 2026` para actualizar el consolidado local y luego audítalo contra BigQuery.
+> **¿El entorno virtual?** Recuerda siempre anteponer `.venv/bin/python` al ejecutar los scripts para asegurar que usas las dependencias y credenciales de Google correctas del proyecto.
