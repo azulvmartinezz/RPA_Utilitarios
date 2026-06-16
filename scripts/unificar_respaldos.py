@@ -206,12 +206,17 @@ def unificar_respaldos():
                         col_eco = next((c for c, n in cols.items() if 'noeconomico' in n or 'economico' in n), None)
                         col_fecha = next((c for c, n in cols.items() if 'fechadecruce' in n or n == 'fecha'), None)
                         col_importe = next((c for c, n in cols.items() if 'importeal100' in n or n == 'importe'), None)
+                        col_tarjeta = next((c for c, n in cols.items() if 'tarjetaidmx' in n), None)
+                        if not col_tarjeta:
+                            col_tarjeta = next((c for c, n in cols.items() if n == 'tarjeta' or 'tarjeta' in n), None)
 
                         df_std = pd.DataFrame()
                         df_std['ECO'] = df[col_eco].astype(str).str.strip() if col_eco else None
                         df_std['Fecha'] = _parse_pase_fecha(df[col_fecha]) if col_fecha else None
                         if col_importe:
                             df_std['Importe'] = pd.to_numeric(df[col_importe].astype(str).str.replace(r'[$,]','',regex=True), errors='coerce').abs()
+                        if col_tarjeta:
+                            df_std['Tarjeta IDMX'] = df[col_tarjeta].astype(str).str.strip()
                         df_std['Archivo_Origen'] = nombre
                         df_std = df_std.dropna(subset=['Importe', 'Fecha', 'ECO'])
                         df_std['ECO'] = df_std['ECO'].apply(_normalize_eco)

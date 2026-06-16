@@ -36,6 +36,8 @@ edenred_profile/
 descargas_temporales/
 respaldo_descargas/
 descargas_gcs/
+HTML_EDENRED/
+HTML_SUPRAMAX/
 *.xlsx
 *.xls
 *.xlsm

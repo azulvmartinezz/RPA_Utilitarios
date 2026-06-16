@@ -60,7 +60,20 @@
 
 ---
 
-## ☁️ 5. `migrar_respaldos_a_gcs.py`
+## 🪪 5. `reporte_tarjetas_por_eco.py`
+**El cruzador de tarjetas por unidad.**
+* **¿Qué hace?:** Genera un reporte con una fila por `ECO` y las tarjetas detectadas por sistema en cuatro columnas: `ECO`, `Supramax`, `Ticket Card` y `Pase`.
+  * Toma los datos desde los consolidados crudos locales.
+  * Si un mismo ECO trae más de una tarjeta en un sistema, las concatena con `|` para no perder evidencia.
+  * En Pase solo podrá poblar la columna si el consolidado de entrada conserva `Tarjeta IDMX`.
+* **Cómo se ejecuta:**
+  ```bash
+  .venv/bin/python scripts/reporte_tarjetas_por_eco.py
+  ```
+
+---
+
+## ☁️ 6. `migrar_respaldos_a_gcs.py`
 **El guardián de la nube.**
 * **¿Qué hace?:** Toma tus archivos descargados localmente y los sube de manera estructurada a Google Cloud Storage para que queden respaldados de forma segura en el bucket (`Pase/EMPRESA/YYYY/MM/archivo.csv`).
 * **Cómo se ejecuta:**
@@ -70,7 +83,7 @@
 
 ---
 
-## 💾 6. `recuperar_pase_2025.py` & `recuperar_edenred_2025.py`
+## 💾 7. `recuperar_pase_2025.py` & `recuperar_edenred_2025.py`
 **Los recuperadores de históricos 2025.**
 * **¿Qué hacen?:** Descargan todos los archivos históricos de 2025 correspondientes a Pase o Edenred desde GCS, aplican las reglas de limpieza y formateo necesarias (como el `index_col=False` y limpieza de espacios en Pase), y los cargan de forma masiva en BigQuery sin duplicados.
 * **Cómo se ejecutan:**
