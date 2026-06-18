@@ -387,7 +387,7 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
     return fallos
 
 
-def main():
+def main(fini_override=None, ffin_override=None):
     print("Iniciando RPA para Supramax...")
     
     credenciales_str = os.getenv('SUPRAMAX_CREDENTIALS')
@@ -407,9 +407,16 @@ def main():
         print(f"\n{'='*50}")
         print(f"🔄 PROCESANDO CUENTA {idx + 1} DE {len(credenciales)}")
         print(f"{'='*50}")
-        process_account(acc['Usuario'], acc['Contraseña'], empresa=acc.get('Empresa'))
+        process_account(
+            acc['Usuario'], 
+            acc['Contraseña'], 
+            fini_override=fini_override, 
+            ffin_override=ffin_override, 
+            empresa=acc.get('Empresa')
+        )
         
     print("\n✅ Proceso global de Supramax finalizado.")
+
 
 if __name__ == "__main__":
     main()

@@ -63,3 +63,10 @@ gcloud/
 application_default_credentials.json
 *.json
 
+# PyInstaller y Distribución final
+build/
+dist/
+*.spec
+ejecutable/RPA_Utilitarios_Ejecutable/
+
+
