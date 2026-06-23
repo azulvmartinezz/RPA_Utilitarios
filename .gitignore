@@ -38,6 +38,7 @@ respaldo_descargas/
 descargas_gcs/
 HTML_EDENRED/
 HTML_SUPRAMAX/
+HTML_FLEETUP/
 *.xlsx
 *.xls
 *.xlsm
