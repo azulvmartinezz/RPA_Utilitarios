@@ -342,9 +342,108 @@ def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
             raise e
 
 
-def main(backfill_mode=False, meses_objetivo=None, start_from=0):
+def _scrape_tags(driver, wait):
+    """Navega a la pestaña de Tags y descarga el archivo CSV directamente usando el botón de exportar."""
+    print("Navegando a la pestaña de Tags...")
+    try:
+        tags_tab = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@role='tab'][contains(translate(., 'tags', 'TAGS'), 'TAGS')]")))
+        driver.execute_script("arguments[0].click();", tags_tab)
+        print("  ✅ Cambiado a pestaña Tags exitosamente.")
+        time.sleep(8)
+        
+        # Registrar archivos pre-existentes para ubicar el nuevo archivo descargado
+        descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
+        pre_files = set(os.listdir(descargas_dir))
+
+        # Expandir "Más opciones de filtros" si el botón de exportar está oculto
+        export_btn_xpath = "//button[@aria-label='file export' or .//*[local-name()='svg' and @title='Exportar a...'] or contains(., 'Exportar')]"
+        try:
+            export_btns = driver.find_elements(By.XPATH, export_btn_xpath)
+            if not any(b.is_displayed() for b in export_btns):
+                print("  El botón de exportar está oculto. Expandiendo 'Más opciones de filtros'...")
+                mas_opciones_btn = wait.until(EC.element_to_be_clickable(
+                    (By.XPATH, "//button[@title='Más opciones de filtros' or @aria-label='Más opciones de filtros']")
+                ))
+                driver.execute_script("arguments[0].click();", mas_opciones_btn)
+                time.sleep(2)
+        except Exception as e:
+            print(f"  ⚠️ No se pudo expandir 'Más opciones de filtros': {e}")
+
+        # Clic en el botón "file export"
+        export_btn = wait.until(EC.element_to_be_clickable((By.XPATH, export_btn_xpath)))
+        driver.execute_script("arguments[0].click();", export_btn)
+        print("  ✅ Clic en botón Exportar exitosamente.")
+        time.sleep(2)
+        
+        # Esperar a que el menú de exportación sea visible y dar clic en la opción CSV
+        xpath_csv = "//li[@role='menuitem'][contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'coma') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'csv')]"
+        csv_option = wait.until(EC.element_to_be_clickable((By.XPATH, xpath_csv)))
+        driver.execute_script("arguments[0].click();", csv_option)
+        print("  ✅ Clic en la opción CSV.")
+        
+        # Esperar a que el archivo se descargue
+        time.sleep(12)
+
+        # Identificar el archivo descargado
+        post_files = set(os.listdir(descargas_dir))
+        new_files = post_files - pre_files
+        csv_downloaded = [f for f in new_files if f.endswith('.csv')]
+        
+        if not csv_downloaded:
+            print("  ❌ No se encontró ningún archivo CSV nuevo descargado.")
+            return {}
+            
+        downloaded_file = os.path.join(descargas_dir, csv_downloaded[0])
+        print(f"  ✅ Archivo de tags descargado: {downloaded_file}")
+
+        # Leer el CSV y extraer los tags
+        tags_map = {}
+        import pandas as pd
+        df = pd.read_csv(downloaded_file, encoding="utf-8", on_bad_lines="skip")
+        
+        tag_col = next((c for c in df.columns if 'tag' in str(c).strip().lower() or 'tarjeta' in str(c).strip().lower()), None)
+        eco_col = next((c for c in df.columns if 'eco' in str(c).strip().lower() or 'vehiculo' in str(c).strip().lower() or 'vehículo' in str(c).strip().lower()), None)
+        
+        if tag_col and eco_col:
+            for _, row in df.iterrows():
+                tag_val = str(row[tag_col]).strip().replace(" ", "").rstrip(".")
+                eco_val = str(row[eco_col]).strip().upper()
+                
+                # Normalizar ECO
+                m = re.search(r"^(AU|CA)-\d{3}", eco_val)
+                if m and tag_val and tag_val != "NAN" and tag_val != "":
+                    tag_clean = tag_val
+                    if tag_clean.isdigit() and len(tag_clean) == 8:
+                        tag_clean = "IMDM" + tag_clean
+                    tags_map[m.group(0)] = tag_clean
+            print(f"  ✅ Se extrajeron {len(tags_map)} tags válidos desde el CSV.")
+        else:
+            print(f"  ❌ No se encontraron las columnas de 'Tag' y 'Eco' en el CSV. Columnas detectadas: {list(df.columns)}")
+            
+        try:
+            os.remove(downloaded_file)
+        except:
+            pass
+
+        return tags_map
+
+    except Exception as e:
+        print(f"  ❌ Error al intentar exportar los tags como CSV: {e}")
+        return {}
+    finally:
+        # Volver a la primera pestaña (Cierres o Cruces) para dejar el panel en su estado original
+        try:
+            first_tab = driver.find_element(By.XPATH, "//button[@role='tab'][1]")
+            driver.execute_script("arguments[0].click();", first_tab)
+            time.sleep(2)
+        except:
+            pass
+
+
+def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False, with_tags=False):
     print("Iniciando RPA para Pase...")
     mapa_clientes = _cargar_mapa_clientes()
+    all_scraped_tags = {}
     
     if not TWOCAPTCHA_API_KEY:
         print("ERROR: Por favor agrega tu TWOCAPTCHA_API_KEY al archivo .env")
@@ -375,8 +474,8 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
     profile_path = os.path.join(os.getcwd(), "chrome_profile")
     
     # Ejecutando con undetected-chromedriver para saltar Radware WAF
-    # Fijamos la versión 147 para que coincida con tu navegador instalado
-    driver = uc.Chrome(options=chrome_options, user_data_dir=profile_path, version_main=147)
+    # Fijamos la versión 149 para que coincida con tu navegador instalado
+    driver = uc.Chrome(options=chrome_options, user_data_dir=profile_path, version_main=149)
     
     wait = WebDriverWait(driver, 30)
     
@@ -563,133 +662,138 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                 try:
                     periodo_por_archivo = {}
 
-                    if modalidad == "PREPAGO":
-                        _descargar_prepago(driver, wait, backfill_mode, meses_objetivo)
-                    elif modalidad not in ("POSPAGO",):
-                        print(f"⚠️ Modalidad '{modalidad}' no soportada, omitiendo descargas.")
-                    else:
-                        xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
-                        wait_corto = WebDriverWait(driver, 5)
+                    if not only_tags:
+                        if modalidad == "PREPAGO":
+                            _descargar_prepago(driver, wait, backfill_mode, meses_objetivo)
+                        elif modalidad not in ("POSPAGO",):
+                            print(f"⚠️ Modalidad '{modalidad}' no soportada, omitiendo descargas.")
+                        else:
+                            xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
+                            wait_corto = WebDriverWait(driver, 5)
 
-                        if backfill_mode:
-                            periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
-                            periodo_dropdown.click()
-                            time.sleep(1.5)
-                            opciones_all = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
-                            n_periodos = len(opciones_all)
-                            print(f"Modo backfill: {n_periodos} periodos encontrados. Descargando todos...")
-                            driver.find_element(By.TAG_NAME, 'body').click()
-                            time.sleep(1)
-
-                            for i in range(n_periodos):
+                            if backfill_mode:
                                 periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
                                 periodo_dropdown.click()
                                 time.sleep(1.5)
-                                opciones_iter = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
-                                if i >= len(opciones_iter):
-                                    break
-                                texto = opciones_iter[i].text
-                                if meses_objetivo and not _periodo_en_rango(texto, meses_objetivo):
-                                    print(f"  Saltando periodo fuera del rango: {texto[:50]}...")
-                                    driver.find_element(By.TAG_NAME, 'body').click()
-                                    time.sleep(0.5)
-                                    continue
-                                print(f"  Periodo {i+1}/{n_periodos}: {texto}")
-                                codigo_match = re.match(r"\s*(\d+)-", texto)
-                                mes_bucket = _mes_objetivo_desde_periodo(texto, meses_objetivo or [])
-                                if codigo_match and mes_bucket:
-                                    periodo_por_archivo[codigo_match.group(1)] = mes_bucket
-                                opciones_iter[i].click()
-                                time.sleep(6)
-                                btn_csv_i = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
-                                btn_csv_i.click()
-                                time.sleep(10)
+                                opciones_all = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+                                n_periodos = len(opciones_all)
+                                print(f"Modo backfill: {n_periodos} periodos encontrados. Descargando todos...")
+                                driver.find_element(By.TAG_NAME, 'body').click()
+                                time.sleep(1)
 
-                            print("✅ Descarga de todos los periodos completada.")
-                        else:
-                            btn_csv_actual = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
-                            print("Descargando archivo CSV del corte actual...")
-                            btn_csv_actual.click()
-                            time.sleep(5)
-
-                            periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
-                            texto_periodo = periodo_dropdown.text
-                            print(f"Periodo detectado: {texto_periodo}")
-
-                            match_mes_completo = re.search(r"DEL\s+01\b", texto_periodo, re.IGNORECASE)
-
-                            if match_mes_completo:
-                                print("✅ Es un mes calendario completo. No se necesita descargar el corte anterior.")
-                                time.sleep(5)
-                            else:
-                                print("\nCiclo desfasado detectado. Abriendo el menú desplegable para el corte anterior...")
-                                periodo_dropdown.click()
-                                time.sleep(1.5)
-                                opciones_periodo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
-                                if len(opciones_periodo) >= 2:
-                                    print("Seleccionando el corte del mes anterior cerrado...")
-                                    opciones_periodo[1].click()
+                                for i in range(n_periodos):
+                                    periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
+                                    periodo_dropdown.click()
+                                    time.sleep(1.5)
+                                    opciones_iter = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+                                    if i >= len(opciones_iter):
+                                        break
+                                    texto = opciones_iter[i].text
+                                    if meses_objetivo and not _periodo_en_rango(texto, meses_objetivo):
+                                        print(f"  Saltando periodo fuera del rango: {texto[:50]}...")
+                                        driver.find_element(By.TAG_NAME, 'body').click()
+                                        time.sleep(0.5)
+                                        continue
+                                    print(f"  Periodo {i+1}/{n_periodos}: {texto}")
+                                    codigo_match = re.match(r"\s*(\d+)-", texto)
+                                    mes_bucket = _mes_objetivo_desde_periodo(texto, meses_objetivo or [])
+                                    if codigo_match and mes_bucket:
+                                        periodo_por_archivo[codigo_match.group(1)] = mes_bucket
+                                    opciones_iter[i].click()
                                     time.sleep(6)
-                                    btn_csv_anterior = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
-                                    print("Descargando archivo CSV del corte anterior...")
-                                    btn_csv_anterior.click()
-                                    print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
-                                    time.sleep(15)
+                                    btn_csv_i = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                    btn_csv_i.click()
+                                    time.sleep(10)
+
+                                print("✅ Descarga de todos los periodos completada.")
+                            else:
+                                btn_csv_actual = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                print("Descargando archivo CSV del corte actual...")
+                                btn_csv_actual.click()
+                                time.sleep(5)
+
+                                periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
+                                texto_periodo = periodo_dropdown.text
+                                print(f"Periodo detectado: {texto_periodo}")
+
+                                match_mes_completo = re.search(r"DEL\s+01\b", texto_periodo, re.IGNORECASE)
+
+                                if match_mes_completo:
+                                    print("✅ Es un mes calendario completo. No se necesita descargar el corte anterior.")
+                                    time.sleep(5)
                                 else:
-                                    print("No hay suficientes periodos en el historial para descargar uno anterior.")
+                                    print("\nCiclo desfasado detectado. Abriendo el menú desplegable para el corte anterior...")
+                                    periodo_dropdown.click()
+                                    time.sleep(1.5)
+                                    opciones_periodo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
+                                    if len(opciones_periodo) >= 2:
+                                        print("Seleccionando el corte del mes anterior cerrado...")
+                                        opciones_periodo[1].click()
+                                        time.sleep(6)
+                                        btn_csv_anterior = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                        print("Descargando archivo CSV del corte anterior...")
+                                        btn_csv_anterior.click()
+                                        print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
+                                        time.sleep(15)
+                                    else:
+                                        print("No hay suficientes periodos en el historial para descargar uno anterior.")
 
-                    print("✅ Descargas completadas para esta empresa.")
+                                print("✅ Descargas completadas para esta empresa.")
 
-                    # === INGESTA A BIGQUERY ===
-                    from bigquery import bq_ingestion
-                    time.sleep(3)
-                    archivos = os.listdir(descargas_dir)
-                    archivos_csv = [os.path.join(descargas_dir, f) for f in archivos if f.endswith('.csv')]
+                    if only_tags or with_tags:
+                        scraped = _scrape_tags(driver, wait)
+                        all_scraped_tags.update(scraped)
 
-                    if archivos_csv:
-                        print(f"🚀 Se encontraron {len(archivos_csv)} archivo(s) CSV. Mandando a la aduana de BigQuery...")
-                        for archivo in archivos_csv:
-                            empresa_archivo = empresa_limpia
-                            numero_cliente_archivo = _extraer_numero_cliente_archivo(archivo)
-                            if empresa_archivo == "sin_empresa" and numero_cliente_archivo:
-                                empresa_archivo = mapa_clientes["by_number"].get(numero_cliente_archivo, "sin_empresa")
-                                if empresa_archivo != "sin_empresa":
-                                    print(
-                                        f"🔁 Empresa inferida desde mapa local para cliente "
-                                        f"{numero_cliente_archivo}: {empresa_archivo}"
+                    if not only_tags:
+                        # === INGESTA A BIGQUERY ===
+                        from bigquery import bq_ingestion
+                        time.sleep(3)
+                        archivos = os.listdir(descargas_dir)
+                        archivos_csv = [os.path.join(descargas_dir, f) for f in archivos if f.endswith('.csv')]
+
+                        if archivos_csv:
+                            print(f"🚀 Se encontraron {len(archivos_csv)} archivo(s) CSV. Mandando a la aduana de BigQuery...")
+                            for archivo in archivos_csv:
+                                empresa_archivo = empresa_limpia
+                                numero_cliente_archivo = _extraer_numero_cliente_archivo(archivo)
+                                if empresa_archivo == "sin_empresa" and numero_cliente_archivo:
+                                    empresa_archivo = mapa_clientes["by_number"].get(numero_cliente_archivo, "sin_empresa")
+                                    if empresa_archivo != "sin_empresa":
+                                        print(
+                                            f"🔁 Empresa inferida desde mapa local para cliente "
+                                            f"{numero_cliente_archivo}: {empresa_archivo}"
+                                        )
+                                try:
+                                    df_limpio = bq_ingestion.procesar_pase(archivo, empresa=empresa_archivo)
+                                    if df_limpio is not None:
+                                        bq_ingestion.ingest_to_bigquery(df_limpio)
+                                except Exception as e:
+                                    print(f"❌ Error durante la ingesta a BQ de {archivo}: {e}")
+                                finally:
+                                    respaldo_dir = os.path.join(os.getcwd(), "respaldo_descargas")
+                                    import sys
+                                    raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                                    if raiz_proyecto not in sys.path:
+                                        sys.path.append(raiz_proyecto)
+                                    import gcs_uploader
+                                    year_override = None
+                                    month_override = None
+                                    archivo_base = os.path.basename(archivo)
+                                    codigo_archivo = re.search(r"\.(\d+)\.csv$", archivo_base, re.IGNORECASE)
+                                    if codigo_archivo and codigo_archivo.group(1) in periodo_por_archivo:
+                                        year_override, month_override = periodo_por_archivo[codigo_archivo.group(1)]
+                                    elif backfill_mode and meses_objetivo and len(set(meses_objetivo)) == 1:
+                                        year_override, month_override = meses_objetivo[0]
+
+                                    gcs_uploader.subir_y_borrar_local(
+                                        archivo,
+                                        'Pase',
+                                        empresa=empresa_archivo,
+                                        year=year_override,
+                                        month=month_override,
                                     )
-                            try:
-                                df_limpio = bq_ingestion.procesar_pase(archivo, empresa=empresa_archivo)
-                                if df_limpio is not None:
-                                    bq_ingestion.ingest_to_bigquery(df_limpio)
-                            except Exception as e:
-                                print(f"❌ Error durante la ingesta a BQ de {archivo}: {e}")
-                            finally:
-                                respaldo_dir = os.path.join(os.getcwd(), "respaldo_descargas")
-                                import sys
-                                # Add project root to path so we can import gcs_uploader
-                                raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                                if raiz_proyecto not in sys.path:
-                                    sys.path.append(raiz_proyecto)
-                                import gcs_uploader
-                                year_override = None
-                                month_override = None
-                                archivo_base = os.path.basename(archivo)
-                                codigo_archivo = re.search(r"\.(\d+)\.csv$", archivo_base, re.IGNORECASE)
-                                if codigo_archivo and codigo_archivo.group(1) in periodo_por_archivo:
-                                    year_override, month_override = periodo_por_archivo[codigo_archivo.group(1)]
-                                elif backfill_mode and meses_objetivo and len(set(meses_objetivo)) == 1:
-                                    year_override, month_override = meses_objetivo[0]
-
-                                gcs_uploader.subir_y_borrar_local(
-                                    archivo,
-                                    'Pase',
-                                    empresa=empresa_archivo,
-                                    year=year_override,
-                                    month=month_override,
-                                )
-                    else:
-                        print("⚠️ No se encontraron archivos CSV en la carpeta temporal.")
+                        else:
+                            print("⚠️ No se encontraron archivos CSV en la carpeta temporal.")
 
                 except Exception as e:
                     import traceback
@@ -720,6 +824,21 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
                 print("No se encontraron clientes o se alcanzó el límite.")
             
             indice_actual += 1
+
+        if (only_tags or with_tags) and all_scraped_tags:
+            json_path = os.path.join("HTML_PASE", "tags_mapeados.json")
+            os.makedirs(os.path.dirname(json_path), exist_ok=True)
+            existing_tags = {}
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, "r", encoding="utf-8") as fh:
+                        existing_tags = json.load(fh)
+                except Exception:
+                    pass
+            existing_tags.update(all_scraped_tags)
+            with open(json_path, "w", encoding="utf-8") as fh:
+                json.dump(existing_tags, fh, ensure_ascii=False, indent=2)
+            print(f"✅ Se guardaron {len(all_scraped_tags)} tags (Total consolidado: {len(existing_tags)}) en {json_path}")
             
     except Exception as e:
         print(f"Ocurrió un error en el flujo: {type(e).__name__} - {e}")
@@ -728,4 +847,10 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0):
         driver.quit()
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="PASE RPA Scraper")
+    parser.add_argument("--backfill", action="store_true", help="Ejecutar en modo backfill")
+    parser.add_argument("--only-tags", action="store_true", help="Solo descargar mapeo de Tags")
+    parser.add_argument("--with-tags", action="store_true", help="Descargar consumos y mapeo de Tags")
+    args = parser.parse_args()
+    main(backfill_mode=args.backfill, only_tags=args.only_tags, with_tags=args.with_tags)
