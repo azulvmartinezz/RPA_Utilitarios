@@ -14,6 +14,11 @@ echo "==================================================="
   --collect-all google.api_core \
   --collect-all google.auth \
   --collect-all google.cloud \
+  --collect-all selenium \
+  --collect-all undetected_chromedriver \
+  --collect-all msal \
+  --collect-all O365 \
+  --collect-all requests \
   --distpath RPA_Utilitarios_Ejecutable_Mac \
   --clean ejecutable/app.py
 echo "==================================================="
