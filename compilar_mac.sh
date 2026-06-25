@@ -2,7 +2,7 @@
 echo "==================================================="
 echo "COMPILANDO RPA UTILITARIOS PARA MAC (.APP)"
 echo "==================================================="
-pyinstaller --noconsole --onefile \
+.venv/bin/pyinstaller --noconsole --onefile \
   --add-data "scrapers:scrapers" \
   --add-data "extractors:extractors" \
   --add-data "bigquery:bigquery" \
