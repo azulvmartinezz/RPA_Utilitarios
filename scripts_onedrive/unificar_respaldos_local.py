@@ -69,11 +69,16 @@ def unificar_respaldos_desde_onedrive():
     # 1. SUPRAMAX
     supramax_dir = os.path.join(respaldos_dir, 'Supramax')
     if os.path.exists(supramax_dir):
-        files = [f for f in os.listdir(supramax_dir) if f.endswith('.xls')]
-        print(f"📂 Encontrados {len(files)} archivos de Supramax en OneDrive...")
+        all_supra_files = []
+        for root, dirs, files in os.walk(supramax_dir):
+            for file in files:
+                if file.endswith('.xls') or file.endswith('.xlsx'):
+                    all_supra_files.append(os.path.join(root, file))
+                    
+        print(f"📂 Encontrados {len(all_supra_files)} archivos de Supramax en OneDrive...")
         lista_supra = []
-        for file in files:
-            local_path = os.path.join(supramax_dir, file)
+        for local_path in all_supra_files:
+            file = os.path.basename(local_path)
             try:
                 raw = pd.read_excel(local_path, engine='xlrd', header=None)
                 header_row = next(i for i, row in raw.iterrows() if row.astype(str).str.strip().eq('PLACAS').any())
@@ -81,7 +86,15 @@ def unificar_respaldos_desde_onedrive():
                 df['Archivo_Origen'] = file
                 lista_supra.append(df)
             except Exception as e:
-                print(f"  ⚠️ Error en {file}: {e}")
+                # Si es xlsx o falla xlrd, intentamos con openpyxl
+                try:
+                    raw = pd.read_excel(local_path, engine='openpyxl', header=None)
+                    header_row = next(i for i, row in raw.iterrows() if row.astype(str).str.strip().eq('PLACAS').any())
+                    df = pd.read_excel(local_path, engine='openpyxl', header=header_row)
+                    df['Archivo_Origen'] = file
+                    lista_supra.append(df)
+                except Exception as e2:
+                    print(f"  ⚠️ Error en {file}: {e} | {e2}")
         if lista_supra:
             pd.concat(lista_supra, ignore_index=True).to_csv("CONSOLIDADO_CRUDO_SUPRAMAX.csv", index=False, encoding='utf-8-sig')
             print(f"✅ Creado: CONSOLIDADO_CRUDO_SUPRAMAX.csv")
