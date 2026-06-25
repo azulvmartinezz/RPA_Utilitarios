@@ -1,4 +1,5 @@
 import os
+import shutil
 import hashlib
 import pandas as pd
 from datetime import datetime
@@ -85,6 +86,51 @@ def obtener_mes_año_real(archivo, sistema):
 
 def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=None):
     load_dotenv()
+    onedrive_dir = os.getenv('ONEDRIVE_RESPALDOS_DIR')
+    
+    # 1. Obtener periodo del archivo
+    nombre_original = os.path.basename(archivo_local)
+    
+    # Si el scraper ya sabe el periodo correcto, confiar en ese dato.
+    if year and month:
+        anio, mes = str(year), f"{int(month):02d}"
+    else:
+        # Extraer mes y año real leyendo el archivo
+        anio, mes = obtener_mes_año_real(archivo_local, sistema)
+    if not anio or not mes:
+        # Fallback a la fecha actual si el archivo está vacío o roto
+        dt = datetime.now()
+        anio, mes = dt.strftime("%Y"), dt.strftime("%m")
+        
+    # Clave determinística por contenido
+    with open(archivo_local, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()[:12]
+    nombre_limpio = f"{sistema.lower()}_{digest}_{nombre_original}"
+
+    # 2. Si hay ruta de OneDrive configurada, guardar localmente en OneDrive y saltar GCS
+    if onedrive_dir and os.path.exists(onedrive_dir):
+        try:
+            if empresa:
+                empresa_dir = _sanitize_path_component(empresa)
+                dest_dir = os.path.join(onedrive_dir, sistema, str(anio), f"{int(mes):02d}", empresa_dir)
+            else:
+                dest_dir = os.path.join(onedrive_dir, sistema, str(anio), f"{int(mes):02d}")
+                
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_path = os.path.join(dest_dir, nombre_limpio)
+            
+            # Copiar a la carpeta de OneDrive
+            shutil.copy(archivo_local, dest_path)
+            print(f"[OneDrive] Archivo guardado localmente en OneDrive: {dest_path}")
+            
+            # Eliminar temporal
+            os.remove(archivo_local)
+            print(f"🗑️ Archivo temporal '{nombre_original}' borrado.")
+            return
+        except Exception as e:
+            print(f"❌ Error al guardar localmente en OneDrive: {e}")
+            # Continuar con GCS si falla la copia local
+
     project_id = os.getenv('GCP_PROJECT_ID')
     bucket_name = os.getenv('GCP_BUCKET_RESPALDOS', f"{project_id}-respaldos-rpa")
     
@@ -96,27 +142,6 @@ def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=
         client = storage.Client(project=project_id)
         bucket = client.bucket(bucket_name)
         
-        # Obtenemos el nombre ORIGINAL del archivo (ej. g00L16072.234.csv) SIN timestamps!
-        nombre_original = os.path.basename(archivo_local)
-        
-        # Si el scraper ya sabe el periodo correcto, confiar en ese dato.
-        # Esto evita ambigüedades en CSVs de Pase con cortes que cruzan meses.
-        if year and month:
-            anio, mes = str(year), f"{int(month):02d}"
-        else:
-            # Extraer mes y año real leyendo el archivo
-            anio, mes = obtener_mes_año_real(archivo_local, sistema)
-        if not anio or not mes:
-            # Fallback a la fecha actual si el archivo está vacío o roto
-            dt = datetime.now()
-            anio, mes = dt.strftime("%Y"), dt.strftime("%m")
-            
-        # Clave deterministica por contenido:
-        # - Archivos distintos con el mismo nombre original no se pisan.
-        # - El mismo archivo, si se reprocesa, cae en la misma ruta y no duplica respaldos.
-        with open(archivo_local, "rb") as f:
-            digest = hashlib.sha256(f.read()).hexdigest()[:12]
-        nombre_limpio = f"{sistema.lower()}_{digest}_{nombre_original}"
         if empresa:
             empresa_dir = _sanitize_path_component(empresa)
             ruta_gcs = f"{sistema}/{empresa_dir}/{anio}/{mes}/{nombre_limpio}"

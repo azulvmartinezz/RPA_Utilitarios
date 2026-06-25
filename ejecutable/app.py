@@ -39,7 +39,7 @@ def custom_ingest_to_bigquery(df, project_id=None):
 bq_ingestion.ingest_to_bigquery = custom_ingest_to_bigquery
 
 # Importar flujos de orquestación
-from scrapers import pase_rpa, supramax_rpa, edenred_rpa
+from scrapers import pase_rpa, supramax_rpa, edenred_rpa, fleetup_rpa
 from extractors import edenred_extractor
 
 
@@ -168,6 +168,137 @@ class CTkCalendar(ctk.CTkToplevel):
         self.destroy()
 
 
+class CTkSettings(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Configuración de Rutas")
+        self.geometry("750x450")
+        self.resizable(False, False)
+        
+        self.grab_set()
+        self.focus()
+        
+        # Paleta de colores
+        self.bg_color = "#1e1e2e"
+        self.card_color = "#252538"
+        self.btn_save_color = "#a6e3a1"
+        self.btn_save_hover = "#94e2d5"
+        self.btn_cancel_color = "#f38ba8"
+        self.btn_cancel_hover = "#f5e0dc"
+        
+        self.configure(fg_color=self.bg_color)
+        
+        self.lbl_title = ctk.CTkLabel(
+            self, 
+            text="⚙️ CONFIGURACIÓN DE RUTAS LOCALES (ONEDRIVE)", 
+            font=ctk.CTkFont(family="Century Gothic", size=15, weight="bold"), 
+            text_color="#f5e0dc"
+        )
+        self.lbl_title.pack(pady=(15, 10))
+        
+        self.container = ctk.CTkFrame(self, fg_color=self.card_color, corner_radius=10, border_width=1, border_color="#313244")
+        self.container.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.crear_campos()
+        
+    def crear_campos(self):
+        from tkinter import filedialog
+        
+        def create_path_row(parent, label_text, env_key):
+            frame = ctk.CTkFrame(parent, fg_color="transparent")
+            frame.pack(fill="x", padx=15, pady=8)
+            
+            lbl = ctk.CTkLabel(frame, text=label_text, font=ctk.CTkFont(family="Century Gothic", size=11, weight="bold"), text_color="#cba6f7", width=220, anchor="w")
+            lbl.pack(side="left")
+            
+            val = os.getenv(env_key, "")
+            entry = ctk.CTkEntry(frame, font=ctk.CTkFont(family="Consolas", size=11), text_color="#a6e3a1", fg_color="#11111b", height=30)
+            entry.insert(0, val)
+            entry.pack(side="left", expand=True, fill="x", padx=10)
+            
+            def browse():
+                if env_key == "ONEDRIVE_RESPALDOS_DIR":
+                    path = filedialog.askdirectory(parent=self, title=f"Seleccionar {label_text}")
+                elif env_key == "EXCEL_OUTPUT_PATH":
+                    path = filedialog.asksaveasfilename(parent=self, title=f"Seleccionar {label_text}", filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")], defaultextension=".xlsx")
+                else:
+                    path = filedialog.askopenfilename(parent=self, title=f"Seleccionar {label_text}", filetypes=[("Excel Files", "*.xlsx;*.xlsm"), ("All Files", "*.*")])
+                
+                if path:
+                    path = os.path.normpath(path).replace("\\", "/")
+                    entry.delete(0, "end")
+                    entry.insert(0, path)
+            
+            btn = ctk.CTkButton(frame, text="Examinar", width=80, height=30, fg_color="#313244", hover_color="#45475a", font=("Segoe UI", 11), command=browse)
+            btn.pack(side="right")
+            
+            return entry
+            
+        self.ent_respaldos = create_path_row(self.container, "Carpeta Respaldos OneDrive:", "ONEDRIVE_RESPALDOS_DIR")
+        self.ent_maestro = create_path_row(self.container, "Excel Tabla Maestra:", "EXCEL_MAESTRO_PATH")
+        self.ent_mantenimiento = create_path_row(self.container, "Excel Mantenimientos:", "EXCEL_MANTENIMIENTO_PATH")
+        self.ent_output = create_path_row(self.container, "Excel Reporte Salida (Dashboard):", "EXCEL_OUTPUT_PATH")
+        
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=(10, 15))
+        
+        btn_cancel = ctk.CTkButton(btn_frame, text="Cancelar", fg_color=self.btn_cancel_color, hover_color=self.btn_cancel_hover, text_color="#11111b", font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), width=120, height=35, command=self.destroy)
+        btn_cancel.pack(side="right", padx=(10, 0))
+        
+        btn_save = ctk.CTkButton(btn_frame, text="Guardar Cambios", fg_color=self.btn_save_color, hover_color=self.btn_save_hover, text_color="#11111b", font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), width=150, height=35, command=self.guardar)
+        btn_save.pack(side="right")
+        
+    def guardar(self):
+        respaldos = self.ent_respaldos.get().strip()
+        maestro = self.ent_maestro.get().strip()
+        mantenimiento = self.ent_mantenimiento.get().strip()
+        output = self.ent_output.get().strip()
+        
+        updates = {
+            "ONEDRIVE_RESPALDOS_DIR": respaldos,
+            "EXCEL_MAESTRO_PATH": maestro,
+            "EXCEL_MANTENIMIENTO_PATH": mantenimiento,
+            "EXCEL_OUTPUT_PATH": output
+        }
+        
+        try:
+            env_path = os.path.join(base_dir, '.env')
+            lines = []
+            if os.path.exists(env_path):
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            
+            new_lines = []
+            updated_keys = set()
+            for line in lines:
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#') and '=' in line:
+                    key, val = stripped.split('=', 1)
+                    key = key.strip()
+                    if key in updates:
+                        new_lines.append(f"{key}={updates[key]}\n")
+                        updated_keys.add(key)
+                        continue
+                new_lines.append(line)
+                
+            for key, val in updates.items():
+                if key not in updated_keys:
+                    new_lines.append(f"{key}={val}\n")
+                    
+            with open(env_path, 'w', encoding='utf-8') as f:
+                f.writelines(new_lines)
+                
+            for key, val in updates.items():
+                os.environ[key] = val
+                
+            load_dotenv(env_path, override=True)
+            
+            messagebox.showinfo("Configuración", "¡Configuración guardada exitosamente!")
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo guardar la configuración: {e}")
+
+
 class RPAAppCTk(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -226,16 +357,20 @@ class RPAAppCTk(ctk.CTk):
         self.checks_container.pack(fill="x", padx=15, pady=(0, 10))
 
         self.var_pase = ctk.BooleanVar(value=True)
-        self.chk_pase = ctk.CTkCheckBox(self.checks_container, text="🎫 Portal Pase (Peajes)", variable=self.var_pase, font=ctk.CTkFont(family="Century Gothic", size=12))
+        self.chk_pase = ctk.CTkCheckBox(self.checks_container, text="Portal Pase", variable=self.var_pase, font=ctk.CTkFont(family="Century Gothic", size=12))
         self.chk_pase.pack(side="left", padx=(0, 20), pady=5)
 
         self.var_supramax = ctk.BooleanVar(value=True)
-        self.chk_supramax = ctk.CTkCheckBox(self.checks_container, text="📈 Portal Supramax (Combustible)", variable=self.var_supramax, font=ctk.CTkFont(family="Century Gothic", size=12))
+        self.chk_supramax = ctk.CTkCheckBox(self.checks_container, text="Portal Supramax", variable=self.var_supramax, font=ctk.CTkFont(family="Century Gothic", size=12))
         self.chk_supramax.pack(side="left", padx=20, pady=5)
 
         self.var_edenred = ctk.BooleanVar(value=True)
-        self.chk_edenred = ctk.CTkCheckBox(self.checks_container, text="💎 Portal Edenred + Mail", variable=self.var_edenred, font=ctk.CTkFont(family="Century Gothic", size=12))
+        self.chk_edenred = ctk.CTkCheckBox(self.checks_container, text="Portal Edenred", variable=self.var_edenred, font=ctk.CTkFont(family="Century Gothic", size=12))
         self.chk_edenred.pack(side="left", padx=20, pady=5)
+
+        self.var_fleetup = ctk.BooleanVar(value=True)
+        self.chk_fleetup = ctk.CTkCheckBox(self.checks_container, text="Portal Fleetup", variable=self.var_fleetup, font=ctk.CTkFont(family="Century Gothic", size=12))
+        self.chk_fleetup.pack(side="left", padx=20, pady=5)
 
         # Panel 2: Configuración de Fechas
         self.fechas_frame = ctk.CTkFrame(self.main_container, corner_radius=10, fg_color="#252538", border_width=1, border_color="#313244")
@@ -314,6 +449,12 @@ class RPAAppCTk(ctk.CTk):
         self.btn_auth_o365 = ctk.CTkButton(self.control_frame, text="🔐 Conectar Office 365", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color="#cba6f7", hover_color="#f5c2e7", text_color="#11111b", height=42, corner_radius=8, command=self.start_auth_thread)
         self.btn_auth_o365.pack(side="left", padx=15)
 
+        self.btn_consolidar = ctk.CTkButton(self.control_frame, text="📊 Generar Reporte Dashboard", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color="#f9e2af", hover_color="#f5e0dc", text_color="#11111b", height=42, corner_radius=8, command=self.start_consolidation_thread)
+        self.btn_consolidar.pack(side="left", padx=15)
+
+        self.btn_config = ctk.CTkButton(self.control_frame, text="⚙️ Configurar Rutas", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color="#45475a", hover_color="#585b70", text_color="white", height=42, corner_radius=8, command=self.abrir_configuracion)
+        self.btn_config.pack(side="left", padx=15)
+
         self.lbl_status = ctk.CTkLabel(self.control_frame, text="Listo para iniciar.", font=ctk.CTkFont(family="Century Gothic", size=12, slant="italic"), text_color="#bac2de")
         self.lbl_status.pack(side="right", padx=10)
 
@@ -321,6 +462,9 @@ class RPAAppCTk(ctk.CTk):
         print("💡 Bienvenidos a la Consola Corporativa RPA Utilitarios.")
         print(f"Buscando configuración en: {base_dir}")
         print("========================================================================\n")
+
+    def abrir_configuracion(self):
+        CTkSettings(self)
 
     def on_date_range_change(self, choice):
         if choice == "Rango personalizado":
@@ -373,6 +517,7 @@ class RPAAppCTk(ctk.CTk):
         self.chk_pase.configure(state=estado)
         self.chk_supramax.configure(state=estado)
         self.chk_edenred.configure(state=estado)
+        self.chk_fleetup.configure(state=estado)
         self.combo_fechas.configure(state=estado)
         self.btn_start_date.configure(state=estado)
         self.btn_end_date.configure(state=estado)
@@ -380,9 +525,13 @@ class RPAAppCTk(ctk.CTk):
         if habilitar:
             self.btn_ejecutar.configure(state="normal", fg_color="#a6e3a1", text="🚀 Iniciar Flujos Seleccionados")
             self.btn_auth_o365.configure(state="normal", fg_color="#cba6f7")
+            self.btn_consolidar.configure(state="normal", fg_color="#f9e2af")
+            self.btn_config.configure(state="normal", fg_color="#45475a")
         else:
             self.btn_ejecutar.configure(state="disabled", fg_color="#585b70", text="⏳ Ejecutando...")
             self.btn_auth_o365.configure(state="disabled", fg_color="#585b70")
+            self.btn_consolidar.configure(state="disabled", fg_color="#585b70")
+            self.btn_config.configure(state="disabled", fg_color="#585b70")
 
     def calcular_fechas(self):
         rango = self.combo_fechas.get()
@@ -442,7 +591,7 @@ class RPAAppCTk(ctk.CTk):
             return "rango", fini, ffin, meses_objetivo, meses_edenred
 
     def start_pipeline_thread(self):
-        if not self.var_pase.get() and not self.var_supramax.get() and not self.var_edenred.get():
+        if not self.var_pase.get() and not self.var_supramax.get() and not self.var_edenred.get() and not self.var_fleetup.get():
             messagebox.showwarning("Selección vacía", "Por favor, selecciona al menos un sistema a ejecutar.")
             return
             
@@ -499,7 +648,16 @@ class RPAAppCTk(ctk.CTk):
             except Exception as e:
                 print(f"❌ Error en flujo Supramax: {e}")
 
-        # 3. Ejecución de Edenred
+        # 3. Ejecución de Fleetup
+        if self.var_fleetup.get():
+            print("\n🚛 [FLEETUP] Iniciando flujo (Descarga + Ingesta)...")
+            try:
+                # FleetUp no maneja rango de fechas personalizado por el momento
+                fleetup_rpa.main()
+            except Exception as e:
+                print(f"❌ Error en flujo FleetUp: {e}")
+
+        # 4. Ejecución de Edenred
         if self.var_edenred.get():
             print("\n💎 [EDENRED] Iniciando flujo (Solicitud + Extracción)...")
             try:
@@ -641,6 +799,34 @@ class RPAAppCTk(ctk.CTk):
         except Exception as e:
             print(f"❌ Error en autenticación: {e}")
             self.after(0, lambda: messagebox.showerror("Error", f"Ocurrió un error: {e}"))
+            
+        self.after(0, self.finalizar_ejecucion)
+
+    def start_consolidation_thread(self):
+        self.ejecutando = True
+        self.toggle_controles(False)
+        self.lbl_status.configure(text="Consolidando...", text_color="#f9e2af")
+        thread = threading.Thread(target=self.run_consolidation, daemon=True)
+        thread.start()
+
+    def run_consolidation(self):
+        print("\n" + "="*60)
+        print("📊 INICIANDO PROCESO DE CONSOLIDACIÓN DESDE INTERFAZ 🚀")
+        print("="*60)
+        
+        try:
+            # 1. Unificar los respaldos crudos locales en OneDrive
+            from scripts_onedrive import unificar_respaldos_local
+            unificar_respaldos_local.unificar_respaldos_desde_onedrive()
+            
+            # 2. Realizar el cruce de datos y generar reporte final
+            from scripts import consolidar_utilitarios
+            consolidar_utilitarios.consolidar_todo()
+            print("\n✅ ¡Consolidación finalizada con éxito!")
+            self.after(0, lambda: messagebox.showinfo("Proceso Terminado", "Reporte Dashboard Final consolidado con éxito en la carpeta de OneDrive configurada."))
+        except Exception as e:
+            print(f"❌ Error durante la consolidación: {e}")
+            self.after(0, lambda: messagebox.showerror("Error", f"Ocurrió un error al consolidar: {e}"))
             
         self.after(0, self.finalizar_ejecucion)
 
