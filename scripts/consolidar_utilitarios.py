@@ -41,6 +41,9 @@ def consolidar_todo():
             # Leer la pestaña BASE del Excel de Mantenimientos
             df_mantenimientos_raw = pd.read_excel(mantenimiento_path, sheet_name='BASE')
             print(f"✅ Archivo de Mantenimientos (pestaña BASE) cargado con éxito ({len(df_mantenimientos_raw)} filas).")
+        except PermissionError:
+            print(f"❌ Error de permisos: El archivo de Mantenimientos '{mantenimiento_path}' está siendo usado por otro programa (probablemente está abierto en Excel). Por favor, ciérralo e intenta de nuevo.")
+            df_mantenimientos_raw = pd.DataFrame()
         except Exception as e:
             print(f"❌ Error al leer la pestaña BASE del archivo de Mantenimientos: {e}")
             df_mantenimientos_raw = pd.DataFrame()
@@ -59,6 +62,9 @@ def consolidar_todo():
             
         df_maestra = pd.read_excel(xls, sheet_name=sheet_to_use)
         print(f"✅ Archivo de Tabla Maestra (hoja {sheet_to_use}) cargado con éxito ({len(df_maestra)} filas).")
+    except PermissionError:
+        print(f"❌ Error de permisos: El archivo de Tabla Maestra '{maestro_path}' está siendo usado por otro programa (probablemente está abierto en Excel). Por favor, ciérralo e intenta de nuevo.")
+        return
     except Exception as e:
         print(f"❌ Error crítico al leer el archivo de Tabla Maestra: {e}")
         return
@@ -222,8 +228,10 @@ def consolidar_todo():
                 
         print(f"\n✅ ¡Proceso global completado exitosamente!")
         print(f"📊 Reporte Dashboard generado en: {output_path}")
+    except PermissionError:
+        print(f"❌ Error de permisos: El archivo de salida '{output_path}' está siendo usado por otro programa (probablemente está abierto en Excel). Por favor, ciérralo e intenta de nuevo.")
     except Exception as e:
-        print(f"❌ Error al escribir el archivo final: {e}")
+        print(f"❌ Error crítico al exportar el archivo de reporte final: {e}")
 
 if __name__ == "__main__":
     consolidar_todo()
