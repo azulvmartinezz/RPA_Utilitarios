@@ -4,7 +4,7 @@ import sys
 import os
 import datetime
 import atexit
-from scrapers import edenred_rpa, supramax_rpa, pase_rpa
+from scrapers import edenred_rpa, supramax_rpa, pase_rpa, fleetup_rpa
 from extractors import edenred_extractor
 
 class _Tee:
@@ -51,6 +51,13 @@ def flujo_pase():
     except Exception as e:
         print(f"❌ Error crítico en flujo Pase: {e}")
 
+def flujo_fleetup():
+    print("\n🚛 [FLEETUP] Iniciando flujo (Descarga + Ingesta)...")
+    try:
+        fleetup_rpa.main()
+    except Exception as e:
+        print(f"❌ Error crítico en flujo FleetUp: {e}")
+
 def main():
     start_time = time.time()
     print("="*60)
@@ -63,6 +70,7 @@ def main():
     
     flujo_pase()
     flujo_supramax()
+    flujo_fleetup()
     flujo_edenred()
 
     total_minutos = (time.time() - start_time) / 60

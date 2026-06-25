@@ -38,12 +38,15 @@ respaldo_descargas/
 descargas_gcs/
 HTML_EDENRED/
 HTML_SUPRAMAX/
+HTML_FLEETUP/
+HTML_PASE/
 *.xlsx
 *.xls
 *.xlsm
 *.xlm
 *.csv
 *.pdf
+*.txt
 
 # Logs y resultados
 logs_backfill/
