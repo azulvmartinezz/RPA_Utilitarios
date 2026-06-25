@@ -46,9 +46,19 @@ def consolidar_todo():
             df_mantenimientos_raw = pd.DataFrame()
 
     try:
-        # Cargar Tabla Maestra (por defecto la primera hoja)
-        df_maestra = pd.read_excel(maestro_path)
-        print(f"✅ Archivo de Tabla Maestra cargado con éxito ({len(df_maestra)} filas).")
+        # Cargar Tabla Maestra (hoja Datos_asignación, Datos_asignacion o la primera por defecto)
+        xls = pd.ExcelFile(maestro_path)
+        sheet_to_use = None
+        for name in ['Datos_asignación', 'Datos_asignacion', 'Datos asignación', 'Datos asignacion', 'Datos_Asignación', 'Datos_Asignacion']:
+            if name in xls.sheet_names:
+                sheet_to_use = name
+                break
+        if not sheet_to_use:
+            sheet_to_use = xls.sheet_names[0]
+            print(f"⚠️ Hoja maestra 'Datos_asignación' no encontrada. Usando la primera hoja: {sheet_to_use}")
+            
+        df_maestra = pd.read_excel(xls, sheet_name=sheet_to_use)
+        print(f"✅ Archivo de Tabla Maestra (hoja {sheet_to_use}) cargado con éxito ({len(df_maestra)} filas).")
     except Exception as e:
         print(f"❌ Error crítico al leer el archivo de Tabla Maestra: {e}")
         return
@@ -63,8 +73,37 @@ def consolidar_todo():
             try:
                 df_c = pd.read_csv(archivo)
                 df_c['Sistema'] = sistema
-                # Estandarizar columnas
-                df_c['Fecha'] = pd.to_datetime(df_c['Fecha'], errors='coerce')
+                
+                # Normalizar nombres de columnas a minúsculas para búsqueda flexible
+                cols_lower = {c.lower(): c for c in df_c.columns}
+                
+                # Detectar columna ECO/PLACAS
+                col_eco = None
+                for kw in ['eco', 'placas', 'placa']:
+                    if kw in cols_lower:
+                        col_eco = cols_lower[kw]
+                        break
+                
+                # Detectar columna Fecha
+                col_fecha = None
+                for kw in ['fecha', 'datetime', 'date']:
+                    if kw in cols_lower:
+                        col_fecha = cols_lower[kw]
+                        break
+                
+                # Detectar columna Importe
+                col_importe = None
+                for kw in ['importe', 'total', 'monto', 'subtotal']:
+                    if kw in cols_lower:
+                        col_importe = cols_lower[kw]
+                        break
+                
+                if not col_eco or not col_fecha or not col_importe:
+                    print(f"⚠️ Columnas requeridas no detectadas en {archivo}. Se necesitan equivalentes a ECO, Fecha e Importe.")
+                    continue
+                
+                # Estandarizar columnas y tipos
+                df_c[col_fecha] = pd.to_datetime(df_c[col_fecha], errors='coerce')
                 
                 # Mapeo de columnas específicas
                 if 'Tarjeta IDMX' in df_c.columns:
@@ -72,16 +111,15 @@ def consolidar_todo():
                     df_c['Tipo'] = None
                     df_c['Cantidad'] = None
                 elif sistema == 'Supramax':
-                    # Si no tiene concepto, asignamos combustible
                     if 'Concepto' not in df_c.columns:
                         df_c['Concepto'] = 'COMBUSTIBLE'
                 
                 df_std = pd.DataFrame()
-                df_std['ECO'] = df_c['ECO'].apply(_normalize_eco)
-                df_std['Fecha'] = df_c['Fecha']
+                df_std['ECO'] = df_c[col_eco].apply(_normalize_eco)
+                df_std['Fecha'] = df_c[col_fecha]
                 df_std['Concepto'] = df_c.get('Concepto', 'COMBUSTIBLE')
                 df_std['Tipo'] = df_c.get('Tipo', None)
-                df_std['Importe'] = pd.to_numeric(df_c.get('Importe'), errors='coerce')
+                df_std['Importe'] = pd.to_numeric(df_c[col_importe], errors='coerce')
                 df_std['Sistema'] = sistema
                 df_std['Cantidad'] = pd.to_numeric(df_c.get('Cantidad'), errors='coerce')
                 
