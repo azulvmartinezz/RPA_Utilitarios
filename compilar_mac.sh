@@ -19,6 +19,14 @@ echo "==================================================="
   --collect-all msal \
   --collect-all O365 \
   --collect-all requests \
+  --collect-all twocaptcha \
+  --collect-all bs4 \
+  --collect-all webdriver_manager \
+  --collect-all pyarrow \
+  --collect-all db_dtypes \
+  --collect-all openpyxl \
+  --collect-all lxml \
+  --collect-all xlrd \
   --distpath RPA_Utilitarios_Ejecutable_Mac \
   --clean ejecutable/app.py
 echo "==================================================="
