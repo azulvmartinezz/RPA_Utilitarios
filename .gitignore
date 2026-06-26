@@ -72,4 +72,7 @@ dist/
 *.spec
 ejecutable/RPA_Utilitarios_Ejecutable/
 
+# Carpeta de scripts temporales
+scratch/
+
 
