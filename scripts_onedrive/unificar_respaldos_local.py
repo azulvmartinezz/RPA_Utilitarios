@@ -61,7 +61,7 @@ def _limpiar_edenred(df):
 def unificar_respaldos_desde_onedrive():
     respaldos_dir = os.getenv('ONEDRIVE_RESPALDOS_DIR')
     if not respaldos_dir or not os.path.exists(respaldos_dir):
-        print(f"❌ Error: La ruta local de respaldos en OneDrive no existe: {respaldos_dir}")
+        print(f"Error: La ruta local de respaldos en OneDrive no existe: {respaldos_dir}")
         return
         
     print(f"=== UNIFICANDO RESPALDOS LOCALES DESDE ONEDRIVE ({respaldos_dir}) ===")
@@ -75,7 +75,7 @@ def unificar_respaldos_desde_onedrive():
                 if file.endswith('.xls') or file.endswith('.xlsx'):
                     all_supra_files.append(os.path.join(root, file))
                     
-        print(f"📂 Encontrados {len(all_supra_files)} archivos de Supramax en OneDrive...")
+        print(f"Encontrados {len(all_supra_files)} archivos de Supramax en OneDrive...")
         lista_supra = []
         for local_path in all_supra_files:
             file = os.path.basename(local_path)
@@ -94,12 +94,12 @@ def unificar_respaldos_desde_onedrive():
                     df['Archivo_Origen'] = file
                     lista_supra.append(df)
                 except Exception as e2:
-                    print(f"  ⚠️ Error en {file}: {e} | {e2}")
+                    print(f"  Error en {file}: {e} | {e2}")
         if lista_supra:
             pd.concat(lista_supra, ignore_index=True).to_csv("CONSOLIDADO_CRUDO_SUPRAMAX.csv", index=False, encoding='utf-8-sig')
-            print(f"✅ Creado: CONSOLIDADO_CRUDO_SUPRAMAX.csv")
+            print(f"Creado: CONSOLIDADO_CRUDO_SUPRAMAX.csv")
     else:
-        print("⚠️ No existe la carpeta Supramax en la ruta de respaldos.")
+        print("No existe la carpeta Supramax en la ruta de respaldos.")
 
     # 2. PASE
     pase_dir = os.path.join(respaldos_dir, 'Pase')
@@ -111,7 +111,7 @@ def unificar_respaldos_desde_onedrive():
                 if file.endswith('.csv'):
                     all_csv_files.append(os.path.join(root, file))
         
-        print(f"📂 Encontrados {len(all_csv_files)} archivos de Pase en OneDrive...")
+        print(f"Encontrados {len(all_csv_files)} archivos de Pase en OneDrive...")
         lista_pase = []
         for local_path in all_csv_files:
             file = os.path.basename(local_path)
@@ -142,12 +142,12 @@ def unificar_respaldos_desde_onedrive():
                 df_std['ECO'] = df_std['ECO'].apply(_normalize_eco)
                 lista_pase.append(df_std)
             except Exception as e:
-                print(f"  ⚠️ Error en {file}: {e}")
+                print(f"  Error en {file}: {e}")
         if lista_pase:
             pd.concat(lista_pase, ignore_index=True).to_csv("CONSOLIDADO_CRUDO_PASE.csv", index=False, encoding='utf-8-sig')
-            print(f"✅ Creado: CONSOLIDADO_CRUDO_PASE.csv")
+            print(f"Creado: CONSOLIDADO_CRUDO_PASE.csv")
     else:
-        print("⚠️ No existe la carpeta Pase en la ruta de respaldos.")
+        print("No existe la carpeta Pase en la ruta de respaldos.")
 
     # 3. EDENRED
     edenred_dir = os.path.join(respaldos_dir, 'Edenred')
@@ -158,7 +158,7 @@ def unificar_respaldos_desde_onedrive():
                 if file.endswith('.csv') or file.endswith('.xlsx'):
                     all_edenred_files.append(os.path.join(root, file))
                     
-        print(f"📂 Encontrados {len(all_edenred_files)} archivos de Edenred en OneDrive...")
+        print(f"Encontrados {len(all_edenred_files)} archivos de Edenred en OneDrive...")
         lista_eden = []
         lista_eden_limpio = []
         for local_path in all_edenred_files:
@@ -172,15 +172,15 @@ def unificar_respaldos_desde_onedrive():
                 lista_eden.append(df)
                 lista_eden_limpio.append(_limpiar_edenred(df))
             except Exception as e:
-                print(f"  ⚠️ Error en {file}: {e}")
+                print(f"  Error en {file}: {e}")
         if lista_eden:
             pd.concat(lista_eden, ignore_index=True).to_csv("CONSOLIDADO_CRUDO_EDENRED.csv", index=False, encoding='utf-8-sig')
-            print(f"✅ Creado: CONSOLIDADO_CRUDO_EDENRED.csv")
+            print(f"Creado: CONSOLIDADO_CRUDO_EDENRED.csv")
         if lista_eden_limpio:
             pd.concat(lista_eden_limpio, ignore_index=True).to_csv("CONSOLIDADO_LIMPIO_EDENRED.csv", index=False, encoding='utf-8-sig')
-            print(f"✅ Creado: CONSOLIDADO_LIMPIO_EDENRED.csv")
+            print(f"Creado: CONSOLIDADO_LIMPIO_EDENRED.csv")
     else:
-        print("⚠️ No existe la carpeta Edenred en la ruta de respaldos.")
+        print("No existe la carpeta Edenred en la ruta de respaldos.")
         
     print("=== PROCESO FINALIZADO ===")
 

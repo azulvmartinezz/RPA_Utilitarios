@@ -130,6 +130,14 @@ def consolidar_todo():
                 df_std['Cantidad'] = pd.to_numeric(df_c.get('Cantidad'), errors='coerce')
                 
                 df_std = df_std.dropna(subset=['Importe', 'Fecha', 'ECO'])
+                
+                # Filtrar para incluir únicamente vehículos utilitarios (AU-XXX o CA-XXX)
+                df_std = df_std[df_std['ECO'].str.match(r'^(AU|CA)-\d{3}$', na=False)].copy()
+                
+                # Eliminar transacciones duplicadas provenientes de respaldos solapados
+                dedup_cols = ['ECO', 'Fecha', 'Concepto', 'Tipo', 'Importe', 'Sistema', 'Cantidad']
+                df_std = df_std.drop_duplicates(subset=dedup_cols).copy()
+                
                 lista_consumos.append(df_std)
                 print(f"✅ Cargados {len(df_std)} registros de consumos desde {archivo} ({sistema}).")
             except Exception as e:
@@ -153,6 +161,8 @@ def consolidar_todo():
                 df_mantenimientos['Sistema'] = 'Excel Mantenimientos'
                 df_mantenimientos['Cantidad'] = None
                 df_mantenimientos = df_mantenimientos.dropna(subset=['Importe', 'Fecha', 'ECO'])
+                df_mantenimientos = df_mantenimientos[df_mantenimientos['ECO'].str.match(r'^(AU|CA)-\d{3}$', na=False)].copy()
+                df_mantenimientos = df_mantenimientos.drop_duplicates().copy()
                 print(f"✅ Procesados {len(df_mantenimientos)} registros de Mantenimiento local.")
             else:
                 print("⚠️ No se pudieron identificar las columnas requeridas (ECO, Fecha, Importe/PrecioNeto) en Mantenimientos.")

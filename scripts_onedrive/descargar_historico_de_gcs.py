@@ -35,9 +35,6 @@ def descargar_historico():
 
     # Descargar para cada sistema
     for sistema in ['Supramax', 'Pase', 'Edenred']:
-        target_dir = os.path.join(respaldos_dir, sistema)
-        os.makedirs(target_dir, exist_ok=True)
-        
         print(f"\nProcesando carpeta: {sistema}...")
         try:
             blobs = list(bucket.list_blobs(prefix=f"{sistema}/"))
@@ -46,15 +43,15 @@ def descargar_historico():
             print(f"Encontrados {len(valid_blobs)} archivos en la nube para {sistema}.")
             
             for idx, blob in enumerate(valid_blobs):
-                # Mantener nombre de archivo limpio en la carpeta de destino
-                nombre_archivo = os.path.basename(blob.name)
-                dest_path = os.path.join(target_dir, nombre_archivo)
+                # Mantener la estructura de directorios original de GCS en OneDrive
+                dest_path = os.path.join(respaldos_dir, blob.name)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 
                 if not os.path.exists(dest_path):
-                    print(f"[{idx+1}/{len(valid_blobs)}] Descargando: {nombre_archivo}...")
+                    print(f"[{idx+1}/{len(valid_blobs)}] Descargando: {blob.name}...")
                     blob.download_to_filename(dest_path)
                 else:
-                    print(f"  Omitido (Ya existe): {nombre_archivo}")
+                    print(f"  Omitido (Ya existe): {blob.name}")
                     
             print(f"Descarga completada para {sistema}.")
         except Exception as e:
