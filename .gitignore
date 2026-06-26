@@ -76,3 +76,6 @@ ejecutable/RPA_Utilitarios_Ejecutable/
 scratch/
 
 
+
+.pyinstaller/
+RPA_Utilitarios_Ejecutable_Mac/

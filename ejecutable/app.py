@@ -5,25 +5,109 @@ import datetime
 import calendar
 import threading
 import json
+import traceback
 import customtkinter as ctk
 from tkinter import messagebox
 import pandas as pd
 from dotenv import load_dotenv
 
-# Asegurar que el directorio raíz esté en el path para poder importar scrapers, etc.
-if getattr(sys, 'frozen', False):
-    base_dir = os.path.dirname(sys.executable)
-    sys.path.append(sys._MEIPASS)
-else:
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    sys.path.append(base_dir)
+os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+IS_MP_HELPER = getattr(sys, "frozen", False) and any(
+    marker in " ".join(sys.argv)
+    for marker in ("multiprocessing.resource_tracker", "multiprocessing.spawn")
+)
+
+
+def _resolve_runtime_paths():
+    if getattr(sys, "frozen", False):
+        resource_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        runtime_dir = os.path.dirname(os.path.abspath(sys.executable))
+
+        if sys.platform == "darwin":
+            macos_dir = os.path.dirname(os.path.abspath(sys.executable))
+            contents_dir = os.path.dirname(macos_dir)
+            if os.path.basename(macos_dir) == "MacOS" and os.path.basename(contents_dir) == "Contents":
+                app_bundle_dir = os.path.dirname(contents_dir)
+                runtime_dir = os.path.dirname(app_bundle_dir)
+
+        return resource_dir, runtime_dir
+
+    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return project_dir, project_dir
+
+
+resource_dir, base_dir = _resolve_runtime_paths()
+
+for path in (resource_dir, base_dir):
+    if path not in sys.path:
+        sys.path.append(path)
+
+try:
+    os.chdir(base_dir)
+except OSError:
+    pass
+
+
+def _write_boot_log(message):
+    if IS_MP_HELPER:
+        return
+    try:
+        boot_log_path = os.path.join(base_dir, "app_boot.log")
+        with open(boot_log_path, "a", encoding="utf-8") as boot_log:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            boot_log.write(f"[{timestamp}] {message}\n")
+    except OSError:
+        pass
+
+
+def _log_exception(prefix, exc_type, exc_value, exc_traceback):
+    details = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    _write_boot_log(f"{prefix}\n{details}")
+
+
+def _global_excepthook(exc_type, exc_value, exc_traceback):
+    _log_exception("Excepción no controlada al iniciar la app.", exc_type, exc_value, exc_traceback)
+    try:
+        messagebox.showerror(
+            "Error al abrir la aplicación",
+            (
+                "La app falló durante el arranque.\n\n"
+                f"Revisa el archivo:\n{os.path.join(base_dir, 'app_boot.log')}"
+            ),
+        )
+    except Exception:
+        pass
+
+
+sys.excepthook = _global_excepthook
+_write_boot_log(
+    "Inicio de app "
+    f"(frozen={getattr(sys, 'frozen', False)}, resource_dir={resource_dir}, runtime_dir={base_dir})"
+)
+
+
+def _show_error_dialog(title, message):
+    try:
+        messagebox.showerror(title, message)
+    except Exception:
+        pass
 
 # Forzar a dotenv a buscar archivos en la carpeta del ejecutable/raíz del proyecto
-dotenv_path = os.path.join(base_dir, '.env')
-if os.path.exists(dotenv_path):
-    load_dotenv(dotenv_path)
+dotenv_candidates = [os.path.join(base_dir, ".env")]
+if resource_dir != base_dir:
+    dotenv_candidates.append(os.path.join(resource_dir, ".env"))
+
+for dotenv_path in dotenv_candidates:
+    if os.path.exists(dotenv_path):
+        load_dotenv(dotenv_path)
+        _write_boot_log(f"Archivo .env cargado desde: {dotenv_path}")
+        break
 else:
     load_dotenv()
+    _write_boot_log("No se encontró .env explícito; se cargó dotenv por búsqueda estándar.")
 
 # Interceptar BigQuery Ingest para reporte consolidado local
 from bigquery import bq_ingestion
@@ -174,9 +258,11 @@ class CTkSettings(ctk.CTkToplevel):
         self.title("Configuración de Rutas")
         self.geometry("750x450")
         self.resizable(False, False)
-        
+
+        self.transient(parent)
         self.grab_set()
         self.focus()
+        self.lift()
         
         # Paleta de colores
         self.bg_color = "#1e1e2e"
@@ -217,17 +303,39 @@ class CTkSettings(ctk.CTkToplevel):
             entry.pack(side="left", expand=True, fill="x", padx=10)
             
             def browse():
-                if env_key == "ONEDRIVE_RESPALDOS_DIR":
-                    path = filedialog.askdirectory(parent=self, title=f"Seleccionar {label_text}")
-                elif env_key == "EXCEL_OUTPUT_PATH":
-                    path = filedialog.asksaveasfilename(parent=self, title=f"Seleccionar {label_text}", filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")], defaultextension=".xlsx")
-                else:
-                    path = filedialog.askopenfilename(parent=self, title=f"Seleccionar {label_text}", filetypes=[("Excel Files", "*.xlsx;*.xlsm"), ("All Files", "*.*")])
-                
-                if path:
-                    path = os.path.normpath(path).replace("\\", "/")
-                    entry.delete(0, "end")
-                    entry.insert(0, path)
+                try:
+                    if env_key == "ONEDRIVE_RESPALDOS_DIR":
+                        path = filedialog.askdirectory(parent=self, title=f"Seleccionar {label_text}")
+                    elif env_key == "EXCEL_OUTPUT_PATH":
+                        path = filedialog.asksaveasfilename(
+                            parent=self,
+                            title=f"Seleccionar {label_text}",
+                            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")],
+                            defaultextension=".xlsx",
+                        )
+                    else:
+                        path = filedialog.askopenfilename(
+                            parent=self,
+                            title=f"Seleccionar {label_text}",
+                            filetypes=[("Excel Files", ("*.xlsx", "*.xlsm")), ("All Files", "*.*")],
+                        )
+
+                    if path:
+                        path = os.path.normpath(path).replace("\\", "/")
+                        entry.delete(0, "end")
+                        entry.insert(0, path)
+                except Exception:
+                    _log_exception(
+                        f"Error al abrir selector de archivo para {env_key}.",
+                        *sys.exc_info(),
+                    )
+                    _show_error_dialog(
+                        "Error al seleccionar ruta",
+                        (
+                            "No se pudo abrir el selector de archivos.\n\n"
+                            f"Revisa el archivo:\n{os.path.join(base_dir, 'app_boot.log')}"
+                        ),
+                    )
             
             btn = ctk.CTkButton(frame, text="Examinar", width=80, height=30, fg_color="#313244", hover_color="#45475a", font=("Segoe UI", 11), command=browse)
             btn.pack(side="right")
@@ -301,16 +409,14 @@ class CTkSettings(ctk.CTkToplevel):
 
 class RPAAppCTk(ctk.CTk):
     def __init__(self):
+        _write_boot_log("RPAAppCTk.__init__() iniciando.")
         super().__init__()
+        _write_boot_log("Ventana CTk creada.")
 
         # Configurar ventana principal
         self.title("RPA Utilitarios - Consola Corporativa")
         self.geometry("950x740")
         self.resizable(True, True)
-        
-        # Configurar tema visual moderno
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
 
         # Estado de ejecución
         self.ejecutando = False
@@ -319,12 +425,27 @@ class RPAAppCTk(ctk.CTk):
         self.selected_start_date = datetime.date.today()
         self.selected_end_date = datetime.date.today()
 
+        _write_boot_log("Llamando crear_interfaz().")
         self.crear_interfaz()
+        _write_boot_log("crear_interfaz() terminó.")
+        self.report_callback_exception = self._report_callback_exception
         
         # Disparar actualización inicial del texto informativo de fechas
         self.actualizar_info_fechas()
+        _write_boot_log("actualizar_info_fechas() terminó.")
+
+    def _report_callback_exception(self, exc_type, exc_value, exc_traceback):
+        _log_exception("Excepción en callback de Tk.", exc_type, exc_value, exc_traceback)
+        messagebox.showerror(
+            "Error en la interfaz",
+            (
+                "Ocurrió un error dentro de la interfaz.\n\n"
+                f"Revisa el archivo:\n{os.path.join(base_dir, 'app_boot.log')}"
+            ),
+        )
 
     def crear_interfaz(self):
+        _write_boot_log("crear_interfaz(): configurando layout principal.")
         # Configurar grid layout principal (2 filas: Header y Contenido)
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -461,10 +582,23 @@ class RPAAppCTk(ctk.CTk):
         # Mensajes de inicio en consola
         print("💡 Bienvenidos a la Consola Corporativa RPA Utilitarios.")
         print(f"Buscando configuración en: {base_dir}")
+        if resource_dir != base_dir:
+            print(f"Recursos empaquetados cargados desde: {resource_dir}")
         print("========================================================================\n")
+        _write_boot_log("crear_interfaz(): widgets principales renderizados.")
 
     def abrir_configuracion(self):
-        CTkSettings(self)
+        try:
+            CTkSettings(self)
+        except Exception:
+            _log_exception("Error al abrir la ventana de configuración.", *sys.exc_info())
+            _show_error_dialog(
+                "Error de configuración",
+                (
+                    "No se pudo abrir la ventana de configuración.\n\n"
+                    f"Revisa el archivo:\n{os.path.join(base_dir, 'app_boot.log')}"
+                ),
+            )
 
     def on_date_range_change(self, choice):
         if choice == "Rango personalizado":
@@ -832,5 +966,12 @@ class RPAAppCTk(ctk.CTk):
 
 
 if __name__ == "__main__":
-    app = RPAAppCTk()
-    app.mainloop()
+    try:
+        import multiprocessing
+
+        multiprocessing.freeze_support()
+        app = RPAAppCTk()
+        app.mainloop()
+    except Exception:
+        _log_exception("Excepción fatal en el arranque principal.", *sys.exc_info())
+        raise

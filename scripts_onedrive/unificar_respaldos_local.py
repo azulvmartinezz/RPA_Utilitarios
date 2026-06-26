@@ -8,6 +8,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from pase_utils import parse_pase_fecha, read_pase_csv_lossless
+
 load_dotenv()
 
 def _normalize_eco(val):
@@ -16,24 +18,6 @@ def _normalize_eco(val):
     if m:
         return f"{m.group(1)}-{m.group(2).zfill(3)}"
     return s
-
-def _parse_pase_fecha(series):
-    texto = series.astype(str).str.strip()
-    serie = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
-    
-    mask_ymd = texto.str.match(r"^\d{4}/\d{2}/\d{2}$", na=False)
-    if mask_ymd.any():
-        serie.loc[mask_ymd] = pd.to_datetime(texto.loc[mask_ymd], format="%Y/%m/%d", errors="coerce")
-        
-    restantes = serie.isna()
-    if restantes.any():
-        serie.loc[restantes] = pd.to_datetime(texto.loc[restantes], dayfirst=True, errors="coerce")
-        
-    restantes = serie.isna()
-    if restantes.any():
-        serie.loc[restantes] = pd.to_datetime(texto.loc[restantes], errors="coerce")
-        
-    return serie
 
 def _limpiar_edenred(df):
     df = df.copy()
@@ -116,12 +100,7 @@ def unificar_respaldos_desde_onedrive():
         for local_path in all_csv_files:
             file = os.path.basename(local_path)
             try:
-                try:
-                    df = pd.read_csv(local_path, encoding='latin1', index_col=False)
-                except:
-                    df = pd.read_csv(local_path, index_col=False)
-                
-                df.columns = df.columns.str.strip()
+                df = read_pase_csv_lossless(local_path)
                 cols = {c: c.lower().replace(' ', '').replace('ó', 'o').replace('.', '') for c in df.columns}
                 col_eco = next((c for c, n in cols.items() if 'noeconomico' in n or 'economico' in n), None)
                 col_fecha = next((c for c, n in cols.items() if 'fechadecruce' in n or n == 'fecha'), None)
@@ -132,7 +111,7 @@ def unificar_respaldos_desde_onedrive():
                 
                 df_std = pd.DataFrame()
                 df_std['ECO'] = df[col_eco].astype(str).str.strip() if col_eco else None
-                df_std['Fecha'] = _parse_pase_fecha(df[col_fecha]) if col_fecha else None
+                df_std['Fecha'] = parse_pase_fecha(df[col_fecha]) if col_fecha else None
                 if col_importe:
                     df_std['Importe'] = pd.to_numeric(df[col_importe].astype(str).str.replace(r'[$,]','',regex=True), errors='coerce').abs()
                 if col_tarjeta:

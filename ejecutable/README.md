@@ -56,3 +56,13 @@ RPA_Utilitarios_Ejecutable/
 6. Al finalizar, la aplicación le mostrará un mensaje flotante y generará un archivo de Excel consolidado dentro de una nueva subcarpeta llamada `Reportes_Ejecutable/` al lado del programa.
 
 *Si por cualquier motivo el token de automatizaciones llegara a caducar en el futuro, ella sólo tendrá que hacer clic en el botón morado `Conectar Office 365 (Token)` para volver a vincular la cuenta.*
+
+---
+
+## 🍎 Nota para Mac
+
+Para compilar `app.app` en macOS, usa una `.venv` creada con **Python 3.11+** que tenga **Tk 8.6 o superior**.
+
+No uses el Python 3.9 del sistema con Tk 8.5, porque `customtkinter` puede abrir la ventana vacía o dejar la app inestable.
+
+La validación ya quedó automatizada en [`compilar_mac.sh`](/Users/azulvioleta/Downloads/RPA_Utilitarios/compilar_mac.sh).

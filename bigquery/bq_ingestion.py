@@ -5,6 +5,7 @@ import json
 import hashlib
 import pandas as pd
 from google.cloud import bigquery
+from pase_utils import parse_pase_fecha, read_pase_csv_lossless
 
 
 _VALID_IDENTIFIER_RE = re.compile(r'^[A-Za-z0-9_-]+$')
@@ -240,15 +241,7 @@ def procesar_supramax(file_path, empresa=None):
 
 def procesar_pase(file_path, empresa=None):
     print(f"Procesando Pase: {file_path}")
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        try:
-            df = pd.read_csv(file_path, encoding='latin1', index_col=False)
-        except Exception:
-            df = pd.read_csv(file_path, index_col=False)
-
-    df.columns = df.columns.str.strip()
+    df = read_pase_csv_lossless(file_path)
     archivo_origen = os.path.basename(file_path)
 
     df_clean = pd.DataFrame()
@@ -274,35 +267,7 @@ def procesar_pase(file_path, empresa=None):
         df_clean['ECO'] = None
         
     if col_fecha:
-        # Parser multi-formato igual al de unificar_respaldos._parse_pase_fecha:
-        # Pase POSPAGO usa YYYY/MM/DD; PREPAGO (cruces) usa DD/MM/YYYY.
-        # dayfirst=True solo NO funciona con YYYY/MM/DD — hay que intentar el formato
-        # explícito primero para no colapsar miles de filas a NaT.
-        texto = df[col_fecha].astype(str).str.strip()
-        serie = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
-
-        # 1) YYYY/MM/DD (formato ISO mexicano de Pase POSPAGO)
-        mask_ymd = texto.str.match(r"^\d{4}/\d{2}/\d{2}$", na=False)
-        if mask_ymd.any():
-            serie.loc[mask_ymd] = pd.to_datetime(
-                texto.loc[mask_ymd], format="%Y/%m/%d", errors="coerce"
-            )
-
-        # 2) Resto → dayfirst=True (DD/MM/YYYY de cruces PREPAGO)
-        restantes = serie.isna()
-        if restantes.any():
-            serie.loc[restantes] = pd.to_datetime(
-                texto.loc[restantes], dayfirst=True, errors="coerce"
-            )
-
-        # 3) Último intento genérico
-        restantes = serie.isna()
-        if restantes.any():
-            serie.loc[restantes] = pd.to_datetime(
-                texto.loc[restantes], errors="coerce"
-            )
-
-        df_clean['Fecha'] = serie
+        df_clean['Fecha'] = parse_pase_fecha(df[col_fecha])
     else:
         df_clean['Fecha'] = None
     

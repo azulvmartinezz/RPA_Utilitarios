@@ -10,14 +10,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from pase_utils import parse_pase_fecha, read_pase_csv_lossless
+
 def obtener_mes_año_real(archivo, sistema):
     # Intentar leer el archivo para extraer la fecha real de los datos
     try:
         if sistema == 'Pase' or archivo.endswith('.csv'):
-            try:
-                df = pd.read_csv(archivo, encoding='latin1', index_col=False)
-            except:
-                df = pd.read_csv(archivo, index_col=False)
+            df = read_pase_csv_lossless(archivo)
         elif sistema == 'Supramax' and archivo.endswith('.xls'):
             try:
                 raw = pd.read_excel(archivo, engine='xlrd', header=None)
@@ -37,14 +36,7 @@ def obtener_mes_año_real(archivo, sistema):
         if not col_fecha: col_fecha = next((c for c, norm in cols_norm.items() if 'fecha' in norm), None)
         
         if col_fecha and col_fecha in df.columns:
-            # Convertir a datetime de forma "agresiva" para manejar formatos mixtos (US/LATAM)
-            try:
-                # Intento 1: Pandas moderno con soporte explícito de formatos mixtos
-                fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', format='mixed').dropna()
-            except ValueError:
-                # Intento 2: Pandas más antiguo usando inferencia clásica
-                fechas_validas = pd.to_datetime(df[col_fecha], errors='coerce', infer_datetime_format=True).dropna()
-                
+            fechas_validas = parse_pase_fecha(df[col_fecha]).dropna()
             if not fechas_validas.empty:
                 # Tomamos la moda (el valor más repetido) para que gane la mayoría democrática
                 fecha_frecuente = fechas_validas.mode().iloc[0]

@@ -1,6 +1,8 @@
 import os
 import re
 import sys
+import warnings
+import unicodedata
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -20,6 +22,143 @@ def _normalize_eco(val):
 
 def _clean_eco_key(val):
     return re.sub(r'[^A-Z0-9]', '', str(val).upper())
+
+
+def _normalize_col_name(name):
+    text = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r'[^a-z0-9]+', '', text.lower())
+
+
+def _expand_tabbed_single_column(df):
+    real_cols = [c for c in df.columns if not str(c).startswith("Unnamed:")]
+    if len(real_cols) != 1:
+        return df
+
+    first_col = real_cols[0]
+    if "\t" not in str(first_col):
+        return df
+
+    header_parts = [part.strip() for part in str(first_col).split("\t")]
+    rows = []
+    for value in df[first_col].fillna(""):
+        parts = [part.strip() for part in str(value).split("\t")]
+        if len(parts) < len(header_parts):
+            parts.extend([""] * (len(header_parts) - len(parts)))
+        rows.append(parts[:len(header_parts)])
+    return pd.DataFrame(rows, columns=header_parts)
+
+
+def _find_eco_column(columns):
+    normalized = {col: _normalize_col_name(col) for col in columns}
+    for col, norm in normalized.items():
+        if norm == "eco":
+            return col
+    for col, norm in normalized.items():
+        if norm in {"noeconomico", "numeroeconomico"} or ("economico" in norm and "no" in norm):
+            return col
+    return None
+
+
+def _load_maestra_dataframe(maestro_path):
+    explicit_sheet_name = os.getenv("EXCEL_MAESTRO_SHEET")
+    preferred_sheet_names = [
+        "Datos_Asignación",
+        "Datos_Asignacion",
+        "Maestra_Consolidada",
+        "_Join",
+        "Datos_Unidad",
+        "Sheet1",
+    ]
+    if explicit_sheet_name:
+        preferred_sheet_names.insert(0, explicit_sheet_name)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Data Validation extension is not supported and will be removed",
+            category=UserWarning,
+        )
+        excel_file = pd.ExcelFile(maestro_path)
+
+    candidate_sheets = []
+    seen = set()
+    for sheet_name in preferred_sheet_names + excel_file.sheet_names:
+        if sheet_name not in seen:
+            seen.add(sheet_name)
+            candidate_sheets.append(sheet_name)
+
+    inspected = []
+    valid_candidates = []
+    for sheet_name in candidate_sheets:
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Data Validation extension is not supported and will be removed",
+                    category=UserWarning,
+                )
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Conditional Formatting extension is not supported and will be removed",
+                    category=UserWarning,
+                )
+                df_sheet = pd.read_excel(maestro_path, sheet_name=sheet_name)
+        except Exception:
+            continue
+
+        df_sheet = _expand_tabbed_single_column(df_sheet)
+        df_sheet.columns = [str(col).strip() for col in df_sheet.columns]
+        eco_col = _find_eco_column(df_sheet.columns)
+        inspected.append((sheet_name, eco_col, df_sheet.shape))
+        if not eco_col:
+            continue
+
+        rows_with_eco = df_sheet[eco_col].astype(str).str.strip().ne("").sum()
+        valid_candidates.append(
+            {
+                "sheet_name": sheet_name,
+                "eco_col": eco_col,
+                "df": df_sheet,
+                "score": (rows_with_eco, len(df_sheet.columns)),
+            }
+        )
+
+    if not valid_candidates:
+        detail = ", ".join(
+            f"{sheet}={shape}, eco_col={eco_col}"
+            for sheet, eco_col, shape in inspected
+        )
+        raise KeyError(
+            "No se encontró una hoja válida con columna ECO en la Tabla Maestra. "
+            f"Hojas inspeccionadas: {detail}"
+        )
+
+    best = None
+    for preferred_name in preferred_sheet_names:
+        best = next((item for item in valid_candidates if item["sheet_name"] == preferred_name), None)
+        if best is not None:
+            break
+    if best is None:
+        best = max(valid_candidates, key=lambda item: item["score"])
+
+    df_maestra = best["df"].copy()
+    if best["eco_col"] != "ECO":
+        df_maestra = df_maestra.rename(columns={best["eco_col"]: "ECO"})
+    print(
+        f"✅ Hoja de Tabla Maestra seleccionada automáticamente: "
+        f"{best['sheet_name']} ({len(df_maestra)} filas)."
+    )
+    return df_maestra
+
+
+def _find_first_column(columns, *candidates):
+    normalized = {col: _normalize_col_name(col) for col in columns}
+    for candidate in candidates:
+        target = _normalize_col_name(candidate)
+        for col, norm in normalized.items():
+            if norm == target:
+                return col
+    return None
 
 def consolidar_todo():
     print("=== INICIANDO PROCESO DE CONSOLIDACIÓN LOCAL ===")
@@ -49,19 +188,9 @@ def consolidar_todo():
             df_mantenimientos_raw = pd.DataFrame()
 
     try:
-        # Cargar Tabla Maestra (hoja Datos_asignación, Datos_asignacion o la primera por defecto)
-        xls = pd.ExcelFile(maestro_path)
-        sheet_to_use = None
-        for name in ['Datos_asignación', 'Datos_asignacion', 'Datos asignación', 'Datos asignacion', 'Datos_Asignación', 'Datos_Asignacion']:
-            if name in xls.sheet_names:
-                sheet_to_use = name
-                break
-        if not sheet_to_use:
-            sheet_to_use = xls.sheet_names[0]
-            print(f"⚠️ Hoja maestra 'Datos_asignación' no encontrada. Usando la primera hoja: {sheet_to_use}")
-            
-        df_maestra = pd.read_excel(xls, sheet_name=sheet_to_use)
-        print(f"✅ Archivo de Tabla Maestra (hoja {sheet_to_use}) cargado con éxito ({len(df_maestra)} filas).")
+        # Cargar Tabla Maestra detectando automáticamente la hoja tabular correcta.
+        df_maestra = _load_maestra_dataframe(maestro_path)
+        print(f"✅ Archivo de Tabla Maestra cargado con éxito ({len(df_maestra)} filas).")
     except PermissionError:
         print(f"❌ Error de permisos: El archivo de Tabla Maestra '{maestro_path}' está siendo usado por otro programa (probablemente está abierto en Excel). Por favor, ciérralo e intenta de nuevo.")
         return
@@ -77,9 +206,26 @@ def consolidar_todo():
                              ('Edenred', 'CONSOLIDADO_LIMPIO_EDENRED.csv')]:
         if os.path.exists(archivo):
             try:
-                df_c = pd.read_csv(archivo)
+                header_columns = pd.read_csv(archivo, nrows=0).columns.tolist()
+                col_eco = _find_first_column(header_columns, 'ECO', 'PLACAS', 'No. economico', 'No Economico')
+                col_fecha = _find_first_column(header_columns, 'Fecha', 'FECHA', 'Fecha Transacción')
+                col_importe = _find_first_column(header_columns, 'Importe', 'IMPORTE', 'Importe Transacción')
+                col_cantidad = _find_first_column(header_columns, 'Cantidad', 'CANTIDAD', 'Cantidad Mercancía')
+                col_tipo = _find_first_column(header_columns, 'Tipo', 'PRODUCTO', 'Mercancía')
+                col_concepto = _find_first_column(header_columns, 'Concepto')
+                col_tarjeta = _find_first_column(header_columns, 'Tarjeta IDMX')
+
+                if not col_eco or not col_fecha or not col_importe:
+                    raise KeyError(
+                        f"Columnas requeridas no encontradas en {archivo}. "
+                        f"ECO={col_eco}, Fecha={col_fecha}, Importe={col_importe}. "
+                        f"Disponibles: {header_columns}"
+                    )
+
+                selected_columns = [col_eco, col_fecha, col_importe, col_cantidad, col_tipo, col_concepto, col_tarjeta]
+                usecols = list(dict.fromkeys([col for col in selected_columns if col]))
+                df_c = pd.read_csv(archivo, usecols=usecols)
                 df_c['Sistema'] = sistema
-                
                 # Normalizar nombres de columnas a minúsculas para búsqueda flexible
                 cols_lower = {c.lower(): c for c in df_c.columns}
                 
@@ -108,26 +254,27 @@ def consolidar_todo():
                     print(f"⚠️ Columnas requeridas no detectadas en {archivo}. Se necesitan equivalentes a ECO, Fecha e Importe.")
                     continue
                 
-                # Estandarizar columnas y tipos
-                df_c[col_fecha] = pd.to_datetime(df_c[col_fecha], errors='coerce')
+                # Estandarizar columnas
+                df_c['__fecha_std'] = pd.to_datetime(df_c[col_fecha], errors='coerce')
                 
                 # Mapeo de columnas específicas
-                if 'Tarjeta IDMX' in df_c.columns:
+                if col_tarjeta:
                     df_c['Concepto'] = 'PEAJE'
                     df_c['Tipo'] = None
                     df_c['Cantidad'] = None
                 elif sistema == 'Supramax':
-                    if 'Concepto' not in df_c.columns:
+                    # Si no tiene concepto, asignamos combustible
+                    if not col_concepto:
                         df_c['Concepto'] = 'COMBUSTIBLE'
                 
                 df_std = pd.DataFrame()
                 df_std['ECO'] = df_c[col_eco].apply(_normalize_eco)
-                df_std['Fecha'] = df_c[col_fecha]
-                df_std['Concepto'] = df_c.get('Concepto', 'COMBUSTIBLE')
-                df_std['Tipo'] = df_c.get('Tipo', None)
+                df_std['Fecha'] = df_c['__fecha_std']
+                df_std['Concepto'] = df_c[col_concepto] if col_concepto else df_c.get('Concepto', 'COMBUSTIBLE')
+                df_std['Tipo'] = df_c[col_tipo] if col_tipo else df_c.get('Tipo', None)
                 df_std['Importe'] = pd.to_numeric(df_c[col_importe], errors='coerce')
                 df_std['Sistema'] = sistema
-                df_std['Cantidad'] = pd.to_numeric(df_c.get('Cantidad'), errors='coerce')
+                df_std['Cantidad'] = pd.to_numeric(df_c[col_cantidad], errors='coerce') if col_cantidad else pd.Series([None] * len(df_c))
                 
                 df_std = df_std.dropna(subset=['Importe', 'Fecha', 'ECO'])
                 
@@ -137,9 +284,8 @@ def consolidar_todo():
                 # Eliminar transacciones duplicadas provenientes de respaldos solapados
                 dedup_cols = ['ECO', 'Fecha', 'Concepto', 'Tipo', 'Importe', 'Sistema', 'Cantidad']
                 df_std = df_std.drop_duplicates(subset=dedup_cols).copy()
-                
                 lista_consumos.append(df_std)
-                print(f"✅ Cargados {len(df_std)} registros de consumos desde {archivo} ({sistema}).")
+                print(f"✅ Cargados {len(df_std)} registros de utilitarios desde {archivo} ({sistema}).")
             except Exception as e:
                 print(f"⚠️ Error al leer {archivo}: {e}")
 

@@ -10,6 +10,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from pase_utils import parse_pase_fecha, read_pase_csv_lossless
+
 
 def _normalize_eco(val):
     s = str(val).strip().upper().replace(' ', '').replace('.', '')
@@ -18,29 +20,6 @@ def _normalize_eco(val):
     if m:
         return f"{m.group(1)}-{m.group(2).zfill(3)}"
     return s
-
-
-def _parse_pase_fecha(series):
-    texto = series.astype(str).str.strip()
-    serie = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
-
-    # 1) Formato ISO mexicano visto en Pase: YYYY/MM/DD
-    mask_ymd = texto.str.match(r"^\d{4}/\d{2}/\d{2}$", na=False)
-    if mask_ymd.any():
-        serie.loc[mask_ymd] = pd.to_datetime(texto.loc[mask_ymd], format="%Y/%m/%d", errors="coerce")
-
-    # 2) Para el resto, usar el mismo criterio operativo que BQ: dayfirst=True
-    restantes = serie.isna()
-    if restantes.any():
-        serie.loc[restantes] = pd.to_datetime(texto.loc[restantes], dayfirst=True, errors="coerce")
-
-    # 3) Último intento genérico por si aparece alguna variante rara
-    restantes = serie.isna()
-    if restantes.any():
-        serie.loc[restantes] = pd.to_datetime(texto.loc[restantes], errors="coerce")
-
-    return serie
-
 
 def _extraer_periodo_desde_ruta_pase(blob_name):
     match = re.search(r'/(\d{4})/(\d{2})/', blob_name)
@@ -196,12 +175,7 @@ def unificar_respaldos():
                     local_path = os.path.join(tmpdir, nombre)
                     blob.download_to_filename(local_path)
                     try:
-                        try:
-                            df = pd.read_csv(local_path, encoding='latin1', index_col=False)
-                        except:
-                            df = pd.read_csv(local_path, index_col=False)
-                        
-                        df.columns = df.columns.str.strip()
+                        df = read_pase_csv_lossless(local_path)
                         cols = {c: c.lower().replace(' ', '').replace('ó','o').replace('.','') for c in df.columns}
                         col_eco = next((c for c, n in cols.items() if 'noeconomico' in n or 'economico' in n), None)
                         col_fecha = next((c for c, n in cols.items() if 'fechadecruce' in n or n == 'fecha'), None)
@@ -212,7 +186,7 @@ def unificar_respaldos():
 
                         df_std = pd.DataFrame()
                         df_std['ECO'] = df[col_eco].astype(str).str.strip() if col_eco else None
-                        df_std['Fecha'] = _parse_pase_fecha(df[col_fecha]) if col_fecha else None
+                        df_std['Fecha'] = parse_pase_fecha(df[col_fecha]) if col_fecha else None
                         if col_importe:
                             df_std['Importe'] = pd.to_numeric(df[col_importe].astype(str).str.replace(r'[$,]','',regex=True), errors='coerce').abs()
                         if col_tarjeta:
