@@ -721,7 +721,6 @@ def consolidar_todo():
                 if len(ref_parts) == 2:
                     start_cell = ref_parts[0]
                     end_cell = ref_parts[1]
-                    import re
                     m = re.match(r'^([A-Z]+)', end_cell)
                     if m:
                         end_col = m.group(1)
