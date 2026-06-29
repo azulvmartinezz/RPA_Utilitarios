@@ -169,13 +169,13 @@ class CTkCalendar(ctk.CTkToplevel):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", pady=12, padx=15)
         
-        btn_prev = ctk.CTkButton(header, text="◀", width=35, height=35, fg_color="#313244", hover_color="#45475a", font=("Segoe UI", 12), command=self.prev_month)
+        btn_prev = ctk.CTkButton(header, text="◀", width=35, height=35, fg_color=("#FFFFFF", "#023047"), hover_color=("#8ECAE6", "#219EBC"), font=("Segoe UI", 12), command=self.prev_month)
         btn_prev.pack(side="left")
         
-        self.lbl_month_year = ctk.CTkLabel(header, text="", font=ctk.CTkFont(family="Century Gothic", size=14, weight="bold"), text_color="#cdd6f4")
+        self.lbl_month_year = ctk.CTkLabel(header, text="", font=ctk.CTkFont(family="Century Gothic", size=14, weight="bold"), text_color=("#FB8500", "#FFB703"))
         self.lbl_month_year.pack(side="left", expand=True)
         
-        btn_next = ctk.CTkButton(header, text="▶", width=35, height=35, fg_color="#313244", hover_color="#45475a", font=("Segoe UI", 12), command=self.next_month)
+        btn_next = ctk.CTkButton(header, text="▶", width=35, height=35, fg_color=("#FFFFFF", "#023047"), hover_color=("#8ECAE6", "#219EBC"), font=("Segoe UI", 12), command=self.next_month)
         btn_next.pack(side="right")
         
         # Grid para los nombres de días de la semana
@@ -183,7 +183,7 @@ class CTkCalendar(ctk.CTkToplevel):
         dias_semana_frame.pack(fill="x", padx=15)
         dias_letras = ["Do", "Lu", "Ma", "Mi", "Ju", "Vi", "Sa"]
         for d in dias_letras:
-            lbl = ctk.CTkLabel(dias_semana_frame, text=d, font=ctk.CTkFont(family="Century Gothic", size=11, weight="bold"), text_color="#cba6f7", width=42)
+            lbl = ctk.CTkLabel(dias_semana_frame, text=d, font=ctk.CTkFont(family="Century Gothic", size=11, weight="bold"), text_color=("#219EBC", "#8ECAE6"), width=42)
             lbl.pack(side="left", expand=True)
             
         # Contenedor del grid de días
@@ -229,9 +229,9 @@ class CTkCalendar(ctk.CTkToplevel):
                                        self.selected_date.month == self.month and 
                                        self.selected_date.year == self.year)
                                        
-                    bg = "#cba6f7" if es_seleccionado else "#313244"
-                    fg = "#11111b" if es_seleccionado else "white"
-                    hover = "#f5c2e7" if es_seleccionado else "#45475a"
+                    bg = "#FFB703" if es_seleccionado else "#023047"
+                    fg = "#011E2D" if es_seleccionado else "white"
+                    hover = "#FB8500" if es_seleccionado else "#219EBC"
                     
                     btn = ctk.CTkButton(
                         self.days_frame, 
@@ -265,12 +265,12 @@ class CTkSettings(ctk.CTkToplevel):
         self.lift()
         
         # Paleta de colores
-        self.bg_color = "#1e1e2e"
-        self.card_color = "#252538"
-        self.btn_save_color = "#a6e3a1"
-        self.btn_save_hover = "#94e2d5"
-        self.btn_cancel_color = "#f38ba8"
-        self.btn_cancel_hover = "#f5e0dc"
+        self.bg_color = "#011E2D"
+        self.card_color = "#023047"
+        self.btn_save_color = "#FFB703"
+        self.btn_save_hover = "#FB8500"
+        self.btn_cancel_color = "#8ECAE6"
+        self.btn_cancel_hover = "#219EBC"
         
         self.configure(fg_color=self.bg_color)
         
@@ -278,11 +278,11 @@ class CTkSettings(ctk.CTkToplevel):
             self, 
             text="⚙️ CONFIGURACIÓN DE RUTAS LOCALES (ONEDRIVE)", 
             font=ctk.CTkFont(family="Century Gothic", size=15, weight="bold"), 
-            text_color="#f5e0dc"
+            text_color=("#023047", "white")
         )
         self.lbl_title.pack(pady=(15, 10))
         
-        self.container = ctk.CTkFrame(self, fg_color=self.card_color, corner_radius=10, border_width=1, border_color="#313244")
+        self.container = ctk.CTkFrame(self, fg_color=self.card_color, corner_radius=10, border_width=1, border_color=("#8ECAE6", "#219EBC"))
         self.container.pack(fill="both", expand=True, padx=20, pady=10)
         
         self.crear_campos()
@@ -294,11 +294,11 @@ class CTkSettings(ctk.CTkToplevel):
             frame = ctk.CTkFrame(parent, fg_color="transparent")
             frame.pack(fill="x", padx=15, pady=8)
             
-            lbl = ctk.CTkLabel(frame, text=label_text, font=ctk.CTkFont(family="Century Gothic", size=11, weight="bold"), text_color="#cba6f7", width=220, anchor="w")
+            lbl = ctk.CTkLabel(frame, text=label_text, font=ctk.CTkFont(family="Century Gothic", size=11, weight="bold"), text_color=("#219EBC", "#8ECAE6"), width=220, anchor="w")
             lbl.pack(side="left")
             
             val = os.getenv(env_key, "")
-            entry = ctk.CTkEntry(frame, font=ctk.CTkFont(family="Consolas", size=11), text_color="#a6e3a1", fg_color="#11111b", height=30)
+            entry = ctk.CTkEntry(frame, font=ctk.CTkFont(family="Consolas", size=11), text_color=("#023047", "white"), fg_color=("#F0F2F5", "#011E2D"), border_color=("#8ECAE6", "#219EBC"), height=30)
             entry.insert(0, val)
             entry.pack(side="left", expand=True, fill="x", padx=10)
             
@@ -337,7 +337,7 @@ class CTkSettings(ctk.CTkToplevel):
                         ),
                     )
             
-            btn = ctk.CTkButton(frame, text="Examinar", width=80, height=30, fg_color="#313244", hover_color="#45475a", font=("Segoe UI", 11), command=browse)
+            btn = ctk.CTkButton(frame, text="Examinar", width=80, height=30, fg_color=("#8ECAE6", "#219EBC"), hover_color=("#219EBC", "#8ECAE6"), font=("Segoe UI", 11), command=browse)
             btn.pack(side="right")
             
             return entry
@@ -346,14 +346,15 @@ class CTkSettings(ctk.CTkToplevel):
         self.ent_maestro = create_path_row(self.container, "Excel Tabla Maestra:", "EXCEL_MAESTRO_PATH")
         self.ent_mantenimiento = create_path_row(self.container, "Excel Mantenimientos:", "EXCEL_MANTENIMIENTO_PATH")
         self.ent_output = create_path_row(self.container, "Excel Reporte Salida (Dashboard):", "EXCEL_OUTPUT_PATH")
+        self.ent_mov_nolaborales = create_path_row(self.container, "Excel Movimientos Fuera Horario:", "EXCEL_MOV_NOLABORALES_PATH")
         
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=20, pady=(10, 15))
         
-        btn_cancel = ctk.CTkButton(btn_frame, text="Cancelar", fg_color=self.btn_cancel_color, hover_color=self.btn_cancel_hover, text_color="#11111b", font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), width=120, height=35, command=self.destroy)
+        btn_cancel = ctk.CTkButton(btn_frame, text="Cancelar", fg_color=self.btn_cancel_color, hover_color=self.btn_cancel_hover, text_color=("#FFFFFF", "#011E2D"), font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), width=120, height=35, command=self.destroy)
         btn_cancel.pack(side="right", padx=(10, 0))
         
-        btn_save = ctk.CTkButton(btn_frame, text="Guardar Cambios", fg_color=self.btn_save_color, hover_color=self.btn_save_hover, text_color="#11111b", font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), width=150, height=35, command=self.guardar)
+        btn_save = ctk.CTkButton(btn_frame, text="Guardar Cambios", fg_color=self.btn_save_color, hover_color=self.btn_save_hover, text_color=("#FFFFFF", "#011E2D"), font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), width=150, height=35, command=self.guardar)
         btn_save.pack(side="right")
         
     def guardar(self):
@@ -361,12 +362,14 @@ class CTkSettings(ctk.CTkToplevel):
         maestro = self.ent_maestro.get().strip()
         mantenimiento = self.ent_mantenimiento.get().strip()
         output = self.ent_output.get().strip()
+        mov_nolaborales = self.ent_mov_nolaborales.get().strip()
         
         updates = {
             "ONEDRIVE_RESPALDOS_DIR": respaldos,
             "EXCEL_MAESTRO_PATH": maestro,
             "EXCEL_MANTENIMIENTO_PATH": mantenimiento,
-            "EXCEL_OUTPUT_PATH": output
+            "EXCEL_OUTPUT_PATH": output,
+            "EXCEL_MOV_NOLABORALES_PATH": mov_nolaborales
         }
         
         try:
@@ -451,27 +454,28 @@ class RPAAppCTk(ctk.CTk):
         self.grid_columnconfigure(0, weight=1)
 
         # 1. Header con fondo oscuro y textos elegantes
-        self.header_frame = ctk.CTkFrame(self, height=90, corner_radius=0, fg_color="#181825")
+        self.header_frame = ctk.CTkFrame(self, height=90, corner_radius=0, fg_color=("#F0F2F5", "#011E2D"))
         self.header_frame.grid(row=0, column=0, sticky="nsew")
         self.header_frame.grid_columnconfigure(0, weight=1)
+        self.header_frame.grid_columnconfigure(1, weight=0)
 
-        self.lbl_title = ctk.CTkLabel(self.header_frame, text="RPA UTILITARIOS", font=ctk.CTkFont(family="Century Gothic", size=22, weight="bold"), text_color="#f5e0dc")
+        self.lbl_title = ctk.CTkLabel(self.header_frame, text="RPA UTILITARIOS", font=ctk.CTkFont(family="Century Gothic", size=22, weight="bold"), text_color=("#FB8500", "#FFB703"))
         self.lbl_title.grid(row=0, column=0, sticky="w", padx=25, pady=(15, 2))
 
-        self.lbl_subtitle = ctk.CTkLabel(self.header_frame, text="Automatización de Portales Financieros • Flota Petroil", font=ctk.CTkFont(family="Century Gothic", size=12, slant="italic"), text_color="#bac2de")
+        self.lbl_subtitle = ctk.CTkLabel(self.header_frame, text="Automatización de Portales Financieros • Flota Petroil", font=ctk.CTkFont(family="Century Gothic", size=12, slant="italic"), text_color=("#219EBC", "#8ECAE6"))
         self.lbl_subtitle.grid(row=1, column=0, sticky="w", padx=25, pady=(0, 15))
 
         # 2. Contenedor de Contenido Principal
-        self.main_container = ctk.CTkFrame(self, corner_radius=15, fg_color="#1e1e2e")
+        self.main_container = ctk.CTkFrame(self, corner_radius=15, fg_color=("#FFFFFF", "#023047"))
         self.main_container.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
         self.main_container.grid_columnconfigure(0, weight=1)
         self.main_container.grid_rowconfigure(2, weight=1) # El textbox de logs (row 2) se estira
 
         # Panel 1: Configuración de Flujos (Checkboxes modernos)
-        self.flujos_frame = ctk.CTkFrame(self.main_container, corner_radius=10, fg_color="#252538", border_width=1, border_color="#313244")
+        self.flujos_frame = ctk.CTkFrame(self.main_container, corner_radius=10, fg_color=("#F0F2F5", "#011E2D"), border_width=1, border_color=("#8ECAE6", "#219EBC"))
         self.flujos_frame.grid(row=0, column=0, sticky="ew", padx=15, pady=15)
         
-        self.lbl_flujos_title = ctk.CTkLabel(self.flujos_frame, text="Configuración de Flujos", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), text_color="#cba6f7")
+        self.lbl_flujos_title = ctk.CTkLabel(self.flujos_frame, text="Configuración de Flujos", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), text_color=("#FB8500", "#FFB703"))
         self.lbl_flujos_title.pack(anchor="w", padx=15, pady=(10, 5))
 
         self.checks_container = ctk.CTkFrame(self.flujos_frame, fg_color="transparent")
@@ -494,10 +498,10 @@ class RPAAppCTk(ctk.CTk):
         self.chk_fleetup.pack(side="left", padx=20, pady=5)
 
         # Panel 2: Configuración de Fechas
-        self.fechas_frame = ctk.CTkFrame(self.main_container, corner_radius=10, fg_color="#252538", border_width=1, border_color="#313244")
+        self.fechas_frame = ctk.CTkFrame(self.main_container, corner_radius=10, fg_color=("#F0F2F5", "#011E2D"), border_width=1, border_color=("#8ECAE6", "#219EBC"))
         self.fechas_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 15))
         
-        self.lbl_fechas_title = ctk.CTkLabel(self.fechas_frame, text="Rango de Fechas a Procesar", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), text_color="#cba6f7")
+        self.lbl_fechas_title = ctk.CTkLabel(self.fechas_frame, text="Rango de Fechas a Procesar", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), text_color=("#FB8500", "#FFB703"))
         self.lbl_fechas_title.pack(anchor="w", padx=15, pady=(10, 2))
 
         self.date_selection_container = ctk.CTkFrame(self.fechas_frame, fg_color="transparent")
@@ -514,45 +518,45 @@ class RPAAppCTk(ctk.CTk):
         # Sub-contenedor para fechas personalizadas - Muestra botones que abren nuestro CTkCalendar
         self.custom_dates_frame = ctk.CTkFrame(self.date_selection_container, fg_color="transparent")
         
-        self.lbl_start = ctk.CTkLabel(self.custom_dates_frame, text="Inicio:", font=ctk.CTkFont(family="Century Gothic", size=11), text_color="#cba6f7")
+        self.lbl_start = ctk.CTkLabel(self.custom_dates_frame, text="Inicio:", font=ctk.CTkFont(family="Century Gothic", size=11), text_color=("#219EBC", "#8ECAE6"))
         self.lbl_start.pack(side="left", padx=(5, 2))
         
         self.btn_start_date = ctk.CTkButton(
             self.custom_dates_frame, 
             text=self.selected_start_date.strftime("%d/%m/%Y"), 
             font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), 
-            fg_color="#313244", 
-            hover_color="#45475a", 
+            fg_color=("#FFFFFF", "#023047"), 
+            hover_color=("#8ECAE6", "#219EBC"), 
             width=130, 
             command=self.abrir_calendario_inicio
         )
         self.btn_start_date.pack(side="left", padx=5)
 
-        self.lbl_end = ctk.CTkLabel(self.custom_dates_frame, text="Fin:", font=ctk.CTkFont(family="Century Gothic", size=11), text_color="#cba6f7")
+        self.lbl_end = ctk.CTkLabel(self.custom_dates_frame, text="Fin:", font=ctk.CTkFont(family="Century Gothic", size=11), text_color=("#219EBC", "#8ECAE6"))
         self.lbl_end.pack(side="left", padx=(10, 2))
 
         self.btn_end_date = ctk.CTkButton(
             self.custom_dates_frame, 
             text=self.selected_end_date.strftime("%d/%m/%Y"), 
             font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), 
-            fg_color="#313244", 
-            hover_color="#45475a", 
+            fg_color=("#FFFFFF", "#023047"), 
+            hover_color=("#8ECAE6", "#219EBC"), 
             width=130, 
             command=self.abrir_calendario_fin
         )
         self.btn_end_date.pack(side="left", padx=5)
 
         # Etiqueta informativa dinámica para mostrar qué fechas exactas se procesarán
-        self.lbl_fechas_info = ctk.CTkLabel(self.fechas_frame, text="📅 Rango calculado: Carga de datos...", font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), text_color="#a6e3a1")
+        self.lbl_fechas_info = ctk.CTkLabel(self.fechas_frame, text="📅 Rango calculado: Carga de datos...", font=ctk.CTkFont(family="Century Gothic", size=12, weight="bold"), text_color=("#219EBC", "#8ECAE6"))
         self.lbl_fechas_info.pack(anchor="w", padx=15, pady=(2, 10))
 
         # Panel 3: Consola de salida de Logs
-        self.console_frame = ctk.CTkFrame(self.main_container, corner_radius=10, fg_color="#11111b", border_width=1, border_color="#313244")
+        self.console_frame = ctk.CTkFrame(self.main_container, corner_radius=10, fg_color=("#F0F2F5", "#011E2D"), border_width=1, border_color=("#8ECAE6", "#219EBC"))
         self.console_frame.grid(row=2, column=0, sticky="nsew", padx=15, pady=(0, 15))
         self.console_frame.grid_columnconfigure(0, weight=1)
         self.console_frame.grid_rowconfigure(0, weight=1)
 
-        self.console_text = ctk.CTkTextbox(self.console_frame, font=ctk.CTkFont(family="Consolas", size=12), text_color="#a6e3a1", fg_color="#11111b", border_spacing=10)
+        self.console_text = ctk.CTkTextbox(self.console_frame, font=ctk.CTkFont(family="Consolas", size=12), text_color=("#023047", "white"), fg_color=("#F0F2F5", "#011E2D"), border_spacing=10)
         self.console_text.grid(row=0, column=0, sticky="nsew")
         self.console_text.configure(state="disabled")
 
@@ -564,19 +568,19 @@ class RPAAppCTk(ctk.CTk):
         self.control_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.control_frame.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 15))
 
-        self.btn_ejecutar = ctk.CTkButton(self.control_frame, text="🚀 Iniciar Flujos Seleccionados", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color="#a6e3a1", hover_color="#94e2d5", text_color="#11111b", height=42, corner_radius=8, command=self.start_pipeline_thread)
+        self.btn_ejecutar = ctk.CTkButton(self.control_frame, text="🚀 Iniciar Flujos Seleccionados", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color=("#FB8500", "#FFB703"), hover_color=("#FFB703", "#FB8500"), text_color=("#FFFFFF", "#011E2D"), height=42, corner_radius=8, command=self.start_pipeline_thread)
         self.btn_ejecutar.pack(side="left", padx=(0, 15))
 
-        self.btn_auth_o365 = ctk.CTkButton(self.control_frame, text="🔐 Conectar Office 365", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color="#cba6f7", hover_color="#f5c2e7", text_color="#11111b", height=42, corner_radius=8, command=self.start_auth_thread)
+        self.btn_auth_o365 = ctk.CTkButton(self.control_frame, text="🔐 Conectar Office 365", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color=("#219EBC", "#8ECAE6"), hover_color=("#8ECAE6", "#219EBC"), text_color=("#FFFFFF", "#011E2D"), height=42, corner_radius=8, command=self.start_auth_thread)
         self.btn_auth_o365.pack(side="left", padx=15)
 
-        self.btn_consolidar = ctk.CTkButton(self.control_frame, text="📊 Generar Reporte Dashboard", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color="#f9e2af", hover_color="#f5e0dc", text_color="#11111b", height=42, corner_radius=8, command=self.start_consolidation_thread)
+        self.btn_consolidar = ctk.CTkButton(self.control_frame, text="📊 Generar Reporte Dashboard", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color=("#FB8500", "#FFB703"), hover_color=("#FFB703", "#FB8500"), text_color=("#FFFFFF", "#011E2D"), height=42, corner_radius=8, command=self.start_consolidation_thread)
         self.btn_consolidar.pack(side="left", padx=15)
 
-        self.btn_config = ctk.CTkButton(self.control_frame, text="⚙️ Configurar Rutas", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color="#45475a", hover_color="#585b70", text_color="white", height=42, corner_radius=8, command=self.abrir_configuracion)
+        self.btn_config = ctk.CTkButton(self.control_frame, text="⚙️ Configurar Rutas", font=ctk.CTkFont(family="Century Gothic", size=13, weight="bold"), fg_color=("#F0F2F5", "#011E2D"), hover_color=("#8ECAE6", "#219EBC"), border_width=1, border_color=("#8ECAE6", "#219EBC"), text_color=("#023047", "white"), height=42, corner_radius=8, command=self.abrir_configuracion)
         self.btn_config.pack(side="left", padx=15)
 
-        self.lbl_status = ctk.CTkLabel(self.control_frame, text="Listo para iniciar.", font=ctk.CTkFont(family="Century Gothic", size=12, slant="italic"), text_color="#bac2de")
+        self.lbl_status = ctk.CTkLabel(self.control_frame, text="Listo para iniciar.", font=ctk.CTkFont(family="Century Gothic", size=12, slant="italic"), text_color=("#219EBC", "#8ECAE6"))
         self.lbl_status.pack(side="right", padx=10)
 
         # Mensajes de inicio en consola
@@ -638,12 +642,12 @@ class RPAAppCTk(ctk.CTk):
                 
             self.lbl_fechas_info.configure(
                 text=f"📅 Periodo real a procesar: del {fini} al {ffin}",
-                text_color="#a6e3a1"
+                text_color=("#219EBC", "#8ECAE6")
             )
         except ValueError as e:
             self.lbl_fechas_info.configure(
                 text=f"⚠️ {str(e)}",
-                text_color="#f38ba8"
+                text_color=("#FB8500", "#FFB703")
             )
 
     def toggle_controles(self, habilitar):
@@ -657,15 +661,15 @@ class RPAAppCTk(ctk.CTk):
         self.btn_end_date.configure(state=estado)
         
         if habilitar:
-            self.btn_ejecutar.configure(state="normal", fg_color="#a6e3a1", text="🚀 Iniciar Flujos Seleccionados")
-            self.btn_auth_o365.configure(state="normal", fg_color="#cba6f7")
-            self.btn_consolidar.configure(state="normal", fg_color="#f9e2af")
-            self.btn_config.configure(state="normal", fg_color="#45475a")
+            self.btn_ejecutar.configure(state="normal", fg_color=("#FB8500", "#FFB703"), text="🚀 Iniciar Flujos Seleccionados")
+            self.btn_auth_o365.configure(state="normal", fg_color=("#219EBC", "#8ECAE6"))
+            self.btn_consolidar.configure(state="normal", fg_color=("#FB8500", "#FFB703"))
+            self.btn_config.configure(state="normal", fg_color=("#F0F2F5", "#011E2D"))
         else:
-            self.btn_ejecutar.configure(state="disabled", fg_color="#585b70", text="⏳ Ejecutando...")
-            self.btn_auth_o365.configure(state="disabled", fg_color="#585b70")
-            self.btn_consolidar.configure(state="disabled", fg_color="#585b70")
-            self.btn_config.configure(state="disabled", fg_color="#585b70")
+            self.btn_ejecutar.configure(state="disabled", fg_color=("#8ECAE6", "#219EBC"), text="⏳ Ejecutando...")
+            self.btn_auth_o365.configure(state="disabled", fg_color=("#F0F2F5", "#011E2D"))
+            self.btn_consolidar.configure(state="disabled", fg_color=("#F0F2F5", "#011E2D"))
+            self.btn_config.configure(state="disabled", fg_color=("#F0F2F5", "#011E2D"))
 
     def calcular_fechas(self):
         rango = self.combo_fechas.get()
@@ -737,7 +741,7 @@ class RPAAppCTk(ctk.CTk):
             
         self.ejecutando = True
         self.toggle_controles(False)
-        self.lbl_status.configure(text="Procesando...", text_color="#f9e2af")
+        self.lbl_status.configure(text="Procesando...", text_color=("#FB8500", "#FFB703"))
         
         ingested_dfs.clear()
         

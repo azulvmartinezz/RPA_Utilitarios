@@ -193,8 +193,8 @@ def ingest_to_bigquery(df, project_id=None):
                AND T.Fecha = CAST(S.Fecha AS DATE)
                AND T.Concepto = S.Concepto
                AND IFNULL(T.Tipo, '') = IFNULL(S.Tipo, '')
-               AND IFNULL(T.Cantidad, -1) = IFNULL(S.Cantidad, -1)
-               AND T.Importe = S.Importe
+               AND ABS(IFNULL(T.Cantidad, -1.0) - IFNULL(S.Cantidad, -1.0)) < 0.01
+               AND ABS(T.Importe - S.Importe) < 0.01
                AND T.Sistema = S.Sistema
             WHEN NOT MATCHED THEN
               INSERT (ECO, Fecha, Concepto, Tipo, Cantidad, Importe, Sistema, Empresa, Id_Origen, Archivo_Origen)

@@ -14,11 +14,18 @@ if PROJECT_ROOT not in sys.path:
 load_dotenv()
 
 def _normalize_eco(val):
-    s = str(val).strip().upper().replace(' ', '').replace('.', '')
-    m = re.match(r'^(AU|CA)-?(\d{1,3})(?!\d)', s)
+    s = str(val).strip().upper().replace('.', '')
+    # Check if it has LZC
+    has_lzc = 'LZC' in s
+    s_clean = s.replace('LZC', '').replace(' ', '')
+    
+    m = re.match(r'^(AU|CA)-?(\d{1,3})(?!\d)', s_clean)
     if m:
-        return f"{m.group(1)}-{m.group(2).zfill(3)}"
-    return s
+        eco = f"{m.group(1)}-{m.group(2).zfill(3)}"
+        if has_lzc:
+            return f"{eco} LZC"
+        return eco
+    return str(val).strip().upper()
 
 def _clean_eco_key(val):
     return re.sub(r'[^A-Z0-9]', '', str(val).upper())
@@ -198,6 +205,41 @@ def consolidar_todo():
         print(f"❌ Error crítico al leer el archivo de Tabla Maestra: {e}")
         return
 
+    # Construir diccionario de mapeo de Placas/Supramax ID a ECO
+    mapping_eco = {}
+    for _, row in df_maestra.iterrows():
+        eco = str(row.get('ECO', '')).strip().upper()
+        if re.match(r'^(AU|CA)-?\d{3}(?:\s*LZC)?$', eco):
+            eco_clean = eco.replace('AU', 'AU-').replace('CA', 'CA-').replace('--', '-')
+            # Ensure proper spacing for LZC
+            if 'LZC' in eco_clean and ' LZC' not in eco_clean:
+                eco_clean = eco_clean.replace('LZC', ' LZC')
+            eco = eco_clean
+            
+            # Mapear Placas
+            placa = str(row.get('Placas', '')).strip().upper().replace(' ', '').replace('-', '')
+            if placa and placa != 'NAN':
+                mapping_eco[placa] = eco
+            # Mapear Supramax ID
+            supra = str(row.get('Supramax ID', '')).strip().upper()
+            if supra and supra != 'NAN':
+                mapping_eco[supra] = eco
+
+    # Función auxiliar para mapear ECOs
+    def _resolve_eco(val):
+        val_norm = _normalize_eco(val)
+        if re.match(r'^(AU|CA)-\d{3}(?:\s*LZC)?$', val_norm):
+            return val_norm
+        # Intentar buscar como placa
+        val_placa = str(val).strip().upper().replace(' ', '').replace('-', '')
+        if val_placa in mapping_eco:
+            return mapping_eco[val_placa]
+        # Intentar buscar como Supramax ID exacto
+        val_supra = str(val).strip().upper()
+        if val_supra in mapping_eco:
+            return mapping_eco[val_supra]
+        return val_norm
+
     # 2. Cargar Consumos Consolidados (Pase, Supramax, Edenred)
     lista_consumos = []
     
@@ -268,7 +310,7 @@ def consolidar_todo():
                         df_c['Concepto'] = 'COMBUSTIBLE'
                 
                 df_std = pd.DataFrame()
-                df_std['ECO'] = df_c[col_eco].apply(_normalize_eco)
+                df_std['ECO'] = df_c[col_eco].apply(_resolve_eco)
                 df_std['Fecha'] = df_c['__fecha_std']
                 df_std['Concepto'] = df_c[col_concepto] if col_concepto else df_c.get('Concepto', 'COMBUSTIBLE')
                 df_std['Tipo'] = df_c[col_tipo] if col_tipo else df_c.get('Tipo', None)
@@ -277,9 +319,8 @@ def consolidar_todo():
                 df_std['Cantidad'] = pd.to_numeric(df_c[col_cantidad], errors='coerce') if col_cantidad else pd.Series([None] * len(df_c))
                 
                 df_std = df_std.dropna(subset=['Importe', 'Fecha', 'ECO'])
-                
-                # Filtrar para incluir únicamente vehículos utilitarios (AU-XXX o CA-XXX)
-                df_std = df_std[df_std['ECO'].str.match(r'^(AU|CA)-\d{3}$', na=False)].copy()
+                # Filter ECOs using regex to only allow AU and CA (and optional LZC)
+                df_std = df_std[df_std['ECO'].astype(str).str.match(r'^(AU|CA)-\d{3}(?:\s*LZC)?$', na=False)].copy()
                 
                 # Eliminar transacciones duplicadas provenientes de respaldos solapados
                 dedup_cols = ['ECO', 'Fecha', 'Concepto', 'Tipo', 'Importe', 'Sistema', 'Cantidad']
@@ -307,7 +348,7 @@ def consolidar_todo():
                 df_mantenimientos['Sistema'] = 'Excel Mantenimientos'
                 df_mantenimientos['Cantidad'] = None
                 df_mantenimientos = df_mantenimientos.dropna(subset=['Importe', 'Fecha', 'ECO'])
-                df_mantenimientos = df_mantenimientos[df_mantenimientos['ECO'].str.match(r'^(AU|CA)-\d{3}$', na=False)].copy()
+                df_mantenimientos = df_mantenimientos[df_mantenimientos['ECO'].str.match(r'^(AU|CA)-\d{3}(?:\s*LZC)?$', na=False)].copy()
                 df_mantenimientos = df_mantenimientos.drop_duplicates().copy()
                 print(f"✅ Procesados {len(df_mantenimientos)} registros de Mantenimiento local.")
             else:
@@ -324,6 +365,7 @@ def consolidar_todo():
     df_consumos_total = pd.concat(todas_fuentes, ignore_index=True)
     
     # 5. Cruce con Tabla Maestra (FULL OUTER JOIN por ECO normalizado)
+    df_maestra['ECO'] = df_maestra['ECO'].apply(_normalize_eco)
     df_maestra['ECO_key'] = df_maestra['ECO'].apply(_clean_eco_key)
     df_consumos_total['ECO_key'] = df_consumos_total['ECO'].apply(_clean_eco_key)
     
@@ -338,7 +380,6 @@ def consolidar_todo():
     df_merge['Importe'] = df_merge['Importe'].fillna(0)
     df_merge['Concepto'] = df_merge['Concepto'].fillna('SIN ACTIVIDAD')
     df_merge['Sistema'] = df_merge['Sistema'].fillna('N/A')
-    df_merge['Cantidad'] = df_merge['Cantidad'].fillna(0)
     
     # 6. Crear Columnas de Dashboard e Indicadores
     today = pd.Timestamp.now()
@@ -360,7 +401,21 @@ def consolidar_todo():
     }
     df_merge['Nombre_Mes'] = df_merge['Mes'].map(meses_nombres)
     
-    # 7. Exportar a Excel Final
+    # Ajustes finales de columnas
+    df_merge = df_merge.drop(columns=['Centro de Trabajo', 'Domicilio'], errors='ignore')
+    df_merge = df_merge.rename(columns={'Cantidad': 'Litros'})
+    
+    # Eliminar 'Litros' = 0 para que no salga en Pase (peajes)
+    if 'Litros' in df_merge.columns:
+        df_merge['Litros'] = df_merge['Litros'].replace(0, pd.NA)
+        
+    # Mover ECO al inicio
+    cols = df_merge.columns.tolist()
+    if 'ECO' in cols:
+        cols.insert(0, cols.pop(cols.index('ECO')))
+        df_merge = df_merge[cols]
+    
+    # 7. Exportar o anexar a Excel Final
     output_path = os.getenv('EXCEL_OUTPUT_PATH')
     if not output_path:
         output_dir = os.path.join(PROJECT_ROOT, "Reportes_Ejecutable")
@@ -370,23 +425,211 @@ def consolidar_todo():
         output_dir = os.path.dirname(output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-    
+
+    def _get_signatures(df):
+        ecos = df['ECO'].fillna('').astype(str).str.strip()
+        fechas = pd.to_datetime(df['Fecha'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
+        conceptos = df['Concepto'].fillna('').astype(str).str.strip().str.upper()
+        importes = pd.to_numeric(df['Importe'], errors='coerce').fillna(0).round(2).astype(str)
+        sistemas = df['Sistema'].fillna('').astype(str).str.strip().str.upper()
+        litros = pd.to_numeric(df['Litros'], errors='coerce').fillna(0).round(2).astype(str)
+        return ecos + "_" + fechas + "_" + conceptos + "_" + importes + "_" + sistemas + "_" + litros
+
     try:
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            df_merge.to_excel(writer, sheet_name='Datos', index=False)
-            
-            # Autoajustar anchos de columnas
-            worksheet = writer.sheets['Datos']
-            for col in worksheet.columns:
-                max_len = max(len(str(cell.value or '')) for cell in col)
-                col_letter = col[0].column_letter
-                worksheet.column_dimensions[col_letter].width = max(max_len + 3, 10)
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+
+        # Estilos comunes
+        century_font = Font(name="Century Gothic")
+        century_bold = Font(name="Century Gothic", bold=True)
+        middle_align = Alignment(vertical="center")
+        green_fill = PatternFill(start_color="E4EDEC", end_color="E4EDEC", fill_type="solid")
+
+        excel_exists = os.path.exists(output_path)
+        datos_existe = False
+        
+        if excel_exists:
+            try:
+                # keep_vba=True preserves macros and VBA code in .xlsm files
+                wb = openpyxl.load_workbook(output_path, keep_vba=True)
+                if wb is not None and 'Datos' in wb.sheetnames:
+                    datos_existe = True
+                else:
+                    if wb is not None:
+                        wb.close()
+            except Exception as e:
+                print(f"⚠️ Error al abrir el Excel existente ({e}). Se creará de nuevo.")
+                excel_exists = False
+
+        if excel_exists and datos_existe:
+            print("💾 Excel existente encontrado. Realizando ingesta incremental...")
+            # Leer datos existentes para comparar firmas
+            try:
+                df_existing = pd.read_excel(output_path, sheet_name='Datos')
+                existing_sigs = set(_get_signatures(df_existing))
+                merge_sigs = _get_signatures(df_merge)
                 
+                # Filtrar solo lo nuevo
+                df_new = df_merge[~merge_sigs.isin(existing_sigs)].copy()
+            except Exception as e:
+                print(f"⚠️ Error al leer datos existentes ({e}). Se reescribirá el archivo completo.")
+                excel_exists = False
+                df_new = df_merge
+
+        if not excel_exists or not datos_existe:
+            print("🆕 Creando nuevo archivo Excel consolidado...")
+            df_new = df_merge
+            wb = openpyxl.Workbook()
+            # Eliminar la hoja por defecto
+            default_sheet = wb.active
+            wb.remove(default_sheet)
+            ws_datos = wb.create_sheet(title='Datos')
+            
+            # Escribir encabezados
+            headers = df_new.columns.tolist()
+            ws_datos.append(headers)
+            # Formatear fila de encabezado
+            ws_datos.row_dimensions[1].height = 20
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws_datos.cell(row=1, column=col_idx)
+                cell.font = century_bold
+                cell.fill = green_fill
+                cell.alignment = middle_align
+        else:
+            ws_datos = wb['Datos']
+
+        # Escribir filas nuevas
+        if not df_new.empty:
+            print(f"📥 Insertando {len(df_new)} nuevos registros...")
+            start_row = ws_datos.max_row + 1
+            
+            # openpyxl append row
+            for r_idx, row in df_new.iterrows():
+                row_vals = []
+                for col_name in df_merge.columns:
+                    val = row[col_name]
+                    # Convert pandas NA/NaT/NaN to None for openpyxl
+                    if pd.isna(val):
+                        val = None
+                    row_vals.append(val)
+                ws_datos.append(row_vals)
+            
+            # Formatear solo las filas nuevas agregadas (Optimizado con iter_rows)
+            end_row = ws_datos.max_row
+            print(f"🎨 Aplicando formato a {end_row - start_row + 1} filas nuevas...")
+            for row in ws_datos.iter_rows(min_row=start_row, max_row=end_row, min_col=1, max_col=ws_datos.max_column):
+                ws_datos.row_dimensions[row[0].row].height = 20
+                for cell in row:
+                    cell.font = century_font
+                    cell.alignment = middle_align
+        else:
+            print("✨ No se encontraron registros nuevos para añadir.")
+
+        ws_datos.sheet_view.showGridLines = False
+
+        # Autoajustar anchos de columnas en Datos
+        for col in ws_datos.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = col[0].column_letter
+            ws_datos.column_dimensions[col_letter].width = max(max_len + 3, 10)
+
+        # 8. Ingesta de Movimientos Fuera de Horario Laboral
+        mov_path = os.getenv('EXCEL_MOV_NOLABORALES_PATH')
+        if mov_path and os.path.exists(mov_path):
+            print("🚗 Procesando movimientos fuera de horario laboral...")
+            try:
+                # Leer pestaña Historico
+                df_mov_raw = pd.read_excel(mov_path, sheet_name='Historico')
+                # Normalizar ECO
+                df_mov_raw['ECO'] = df_mov_raw['ECO'].apply(_normalize_eco)
+                # Filtrar ECOs válidos
+                df_mov_raw = df_mov_raw[df_mov_raw['ECO'].str.match(r'^(AU|CA)-\d{3}(?:\s*LZC)?$', na=False)].copy()
+                
+                # Definir firmas de movimientos
+                def _get_mov_sigs(df):
+                    ecos = df['ECO'].fillna('').astype(str).str.strip()
+                    f_ini = pd.to_datetime(df['Fecha-hora Inicio'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
+                    f_fin = pd.to_datetime(df['Fecha-hora Término'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
+                    usuarios = df['Usuario'].fillna('').astype(str).str.strip().str.upper()
+                    distancias = pd.to_numeric(df['Distancia(KM)'], errors='coerce').fillna(0).round(2).astype(str)
+                    return ecos + "_" + f_ini + "_" + f_fin + "_" + usuarios + "_" + distancias
+
+                mov_sheet_exists = 'Movimientos' in wb.sheetnames
+                df_new_mov = pd.DataFrame()
+
+                if mov_sheet_exists:
+                    try:
+                        df_existing_mov = pd.read_excel(output_path, sheet_name='Movimientos')
+                        existing_mov_sigs = set(_get_mov_sigs(df_existing_mov))
+                        new_mov_sigs = _get_mov_sigs(df_mov_raw)
+                        df_new_mov = df_mov_raw[~new_mov_sigs.isin(existing_mov_sigs)].copy()
+                    except Exception as e:
+                        print(f"⚠️ Error al leer movimientos existentes ({e}). Se reescribirá la pestaña.")
+                        mov_sheet_exists = False
+                        df_new_mov = df_mov_raw
+                else:
+                    df_new_mov = df_mov_raw
+
+                if not mov_sheet_exists:
+                    ws_mov = wb.create_sheet(title='Movimientos')
+                    headers_mov = df_new_mov.columns.tolist()
+                    ws_mov.append(headers_mov)
+                    ws_mov.row_dimensions[1].height = 20
+                    for col_idx, header in enumerate(headers_mov, 1):
+                        cell = ws_mov.cell(row=1, column=col_idx)
+                        cell.font = century_bold
+                        cell.fill = green_fill
+                        cell.alignment = middle_align
+                else:
+                    ws_mov = wb['Movimientos']
+
+                if not df_new_mov.empty:
+                    print(f"📥 Insertando {len(df_new_mov)} nuevos registros de movimientos...")
+                    start_row_mov = ws_mov.max_row + 1
+                    
+                    for r_idx, row in df_new_mov.iterrows():
+                        row_vals = []
+                        for col_name in df_mov_raw.columns:
+                            val = row[col_name]
+                            if pd.isna(val):
+                                val = None
+                            row_vals.append(val)
+                        ws_mov.append(row_vals)
+                        
+                    end_row_mov = ws_mov.max_row
+                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas nuevas de movimientos...")
+                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                        ws_mov.row_dimensions[row[0].row].height = 20
+                        for cell in row:
+                            cell.font = century_font
+                            cell.alignment = middle_align
+                else:
+                    print("✨ No se encontraron movimientos nuevos para añadir.")
+
+                ws_mov.sheet_view.showGridLines = False
+
+                # Autoajustar anchos de columnas en Movimientos
+                for col in ws_mov.columns:
+                    max_len = max(len(str(cell.value or '')) for cell in col)
+                    col_letter = col[0].column_letter
+                    ws_mov.column_dimensions[col_letter].width = max(max_len + 3, 10)
+
+            except Exception as e:
+                print(f"⚠️ Error al procesar movimientos fuera de horario laboral: {e}")
+        else:
+            print("⚠️ No se encontró la ruta del reporte de movimientos en .env o el archivo no existe.")
+
+        wb.save(output_path)
+        wb.close()
+        
         print(f"\n✅ ¡Proceso global completado exitosamente!")
         print(f"📊 Reporte Dashboard generado en: {output_path}")
     except PermissionError:
         print(f"❌ Error de permisos: El archivo de salida '{output_path}' está siendo usado por otro programa (probablemente está abierto en Excel). Por favor, ciérralo e intenta de nuevo.")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"❌ Error crítico al exportar el archivo de reporte final: {e}")
 
 if __name__ == "__main__":
