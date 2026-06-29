@@ -466,32 +466,40 @@ def consolidar_todo():
 
         if excel_exists and datos_existe:
             print("💾 Excel existente encontrado. Realizando ingesta incremental...")
-            # Leer datos existentes para comparar firmas
             try:
                 df_existing = pd.read_excel(output_path, sheet_name='Datos')
-                existing_sigs = set(_get_signatures(df_existing))
-                merge_sigs = _get_signatures(df_merge)
+                has_semana_mes = 'Semana_Mes' in df_existing.columns
                 
-                # Filtrar solo lo nuevo
-                df_new = df_merge[~merge_sigs.isin(existing_sigs)].copy()
+                if not has_semana_mes:
+                    print("🔄 Detectada estructura anterior de Datos (sin Semana_Mes). Regenerando la pestaña completa con las nuevas columnas helper...")
+                    datos_existe = False
+                    df_new = df_merge
+                else:
+                    existing_sigs = set(_get_signatures(df_existing))
+                    merge_sigs = _get_signatures(df_merge)
+                    df_new = df_merge[~merge_sigs.isin(existing_sigs)].copy()
             except Exception as e:
                 print(f"⚠️ Error al leer datos existentes ({e}). Se reescribirá el archivo completo.")
                 excel_exists = False
                 df_new = df_merge
 
         if not excel_exists or not datos_existe:
-            print("🆕 Creando nuevo archivo Excel consolidado...")
             df_new = df_merge
-            wb = openpyxl.Workbook()
-            # Eliminar la hoja por defecto
-            default_sheet = wb.active
-            wb.remove(default_sheet)
-            ws_datos = wb.create_sheet(title='Datos')
+            if not excel_exists:
+                print("🆕 Creando nuevo archivo Excel consolidado...")
+                wb = openpyxl.Workbook()
+                default_sheet = wb.active
+                wb.remove(default_sheet)
+                ws_datos = wb.create_sheet(title='Datos')
+            else:
+                print("🔄 Regenerando pestaña Datos...")
+                if 'Datos' in wb.sheetnames:
+                    del wb['Datos']
+                ws_datos = wb.create_sheet(title='Datos')
             
             # Escribir encabezados
             headers = df_new.columns.tolist()
             ws_datos.append(headers)
-            # Formatear fila de encabezado
             ws_datos.row_dimensions[1].height = 20
             for col_idx, header in enumerate(headers, 1):
                 cell = ws_datos.cell(row=1, column=col_idx)
