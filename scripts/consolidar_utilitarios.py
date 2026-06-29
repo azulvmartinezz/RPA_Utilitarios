@@ -555,12 +555,44 @@ def consolidar_todo():
                     distancias = pd.to_numeric(df['Distancia(KM)'], errors='coerce').fillna(0).round(2).astype(str)
                     return ecos + "_" + f_ini + "_" + f_fin + "_" + usuarios + "_" + distancias
 
+                def _compute_helper_columns(df):
+                    if df.empty:
+                        return df.copy()
+                    df_out = df.copy()
+                    dt_series = pd.to_datetime(df_out['Fecha-hora Inicio'], errors='coerce')
+                    df_out['Anio'] = dt_series.dt.year.fillna(0).astype(int)
+                    df_out['Mes_Num'] = dt_series.dt.month.fillna(0).astype(int)
+                    
+                    fecha_solo = dt_series.dt.date
+                    dow_map = {
+                        0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes',
+                        5: 'Sábado', 6: 'Domingo'
+                    }
+                    dia_nombre = dt_series.dt.dayofweek.map(dow_map).fillna('')
+                    hora_frac = dt_series.dt.hour + dt_series.dt.minute / 60.0
+                    
+                    is_dom = dia_nombre == 'Domingo'
+                    is_sab_tarde = (dia_nombre == 'Sábado') & (hora_frac >= 16.0)
+                    is_sem_noche = (~dia_nombre.isin(['Sábado', 'Domingo'])) & (hora_frac >= 20.0)
+                    
+                    is_dom_first = is_dom & ~df_out[is_dom].duplicated(subset=['ECO', fecha_solo])
+                    df_out['Es_Domingo_Aux'] = is_dom_first.reindex(df_out.index, fill_value=False).astype(int)
+                    
+                    is_sab_tarde_first = is_sab_tarde & ~df_out[is_sab_tarde].duplicated(subset=['ECO', fecha_solo])
+                    df_out['Es_Sabado_Tarde_Aux'] = is_sab_tarde_first.reindex(df_out.index, fill_value=False).astype(int)
+                    
+                    is_sem_noche_first = is_sem_noche & ~df_out[is_sem_noche].duplicated(subset=['ECO', fecha_solo])
+                    df_out['Es_Semana_Noche_Aux'] = is_sem_noche_first.reindex(df_out.index, fill_value=False).astype(int)
+                    return df_out
+
                 mov_sheet_exists = 'Movimientos' in wb.sheetnames
                 df_new_mov = pd.DataFrame()
+                has_helpers = False
 
                 if mov_sheet_exists:
                     try:
                         df_existing_mov = pd.read_excel(output_path, sheet_name='Movimientos')
+                        has_helpers = 'Anio' in df_existing_mov.columns
                         existing_mov_sigs = set(_get_mov_sigs(df_existing_mov))
                         new_mov_sigs = _get_mov_sigs(df_mov_raw)
                         df_new_mov = df_mov_raw[~new_mov_sigs.isin(existing_mov_sigs)].copy()
@@ -568,11 +600,46 @@ def consolidar_todo():
                         print(f"⚠️ Error al leer movimientos existentes ({e}). Se reescribirá la pestaña.")
                         mov_sheet_exists = False
                         df_new_mov = df_mov_raw
-                else:
-                    df_new_mov = df_mov_raw
 
-                if not mov_sheet_exists:
+                # Caso 1: La pestaña ya existe pero NO tiene las columnas helper (Backfill)
+                if mov_sheet_exists and not has_helpers:
+                    print("🔄 Detectada estructura anterior de Movimientos. Regenerando la pestaña completa con las nuevas columnas helper...")
+                    df_all = pd.concat([df_existing_mov, df_new_mov], ignore_index=True)
+                    df_all = _compute_helper_columns(df_all)
+                    
+                    del wb['Movimientos']
                     ws_mov = wb.create_sheet(title='Movimientos')
+                    headers_mov = df_all.columns.tolist()
+                    ws_mov.append(headers_mov)
+                    ws_mov.row_dimensions[1].height = 20
+                    for col_idx, header in enumerate(headers_mov, 1):
+                        cell = ws_mov.cell(row=1, column=col_idx)
+                        cell.font = century_bold
+                        cell.fill = green_fill
+                        cell.alignment = middle_align
+                        
+                    start_row_mov = 2
+                    for r_idx, row in df_all.iterrows():
+                        row_vals = []
+                        for col_name in df_all.columns:
+                            val = row[col_name]
+                            if pd.isna(val):
+                                val = None
+                            row_vals.append(val)
+                        ws_mov.append(row_vals)
+                    end_row_mov = ws_mov.max_row
+                    
+                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
+                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                        ws_mov.row_dimensions[row[0].row].height = 20
+                        for cell in row:
+                            cell.font = century_font
+                            cell.alignment = middle_align
+
+                # Caso 2: La pestaña no existe (creación inicial con helpers)
+                elif not mov_sheet_exists:
+                    ws_mov = wb.create_sheet(title='Movimientos')
+                    df_new_mov = _compute_helper_columns(df_new_mov)
                     headers_mov = df_new_mov.columns.tolist()
                     ws_mov.append(headers_mov)
                     ws_mov.row_dimensions[1].height = 20
@@ -581,31 +648,52 @@ def consolidar_todo():
                         cell.font = century_bold
                         cell.fill = green_fill
                         cell.alignment = middle_align
+                        
+                    start_row_mov = 2
+                    if not df_new_mov.empty:
+                        for r_idx, row in df_new_mov.iterrows():
+                            row_vals = []
+                            for col_name in df_new_mov.columns:
+                                val = row[col_name]
+                                if pd.isna(val):
+                                    val = None
+                                row_vals.append(val)
+                            ws_mov.append(row_vals)
+                        end_row_mov = ws_mov.max_row
+                        
+                        print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
+                        for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                            ws_mov.row_dimensions[row[0].row].height = 20
+                            for cell in row:
+                                cell.font = century_font
+                                cell.alignment = middle_align
+
+                # Caso 3: La pestaña ya existe y ya cuenta con las columnas helper (Append)
                 else:
                     ws_mov = wb['Movimientos']
-
-                if not df_new_mov.empty:
-                    print(f"📥 Insertando {len(df_new_mov)} nuevos registros de movimientos...")
-                    start_row_mov = ws_mov.max_row + 1
-                    
-                    for r_idx, row in df_new_mov.iterrows():
-                        row_vals = []
-                        for col_name in df_mov_raw.columns:
-                            val = row[col_name]
-                            if pd.isna(val):
-                                val = None
-                            row_vals.append(val)
-                        ws_mov.append(row_vals)
+                    if not df_new_mov.empty:
+                        print(f"📥 Insertando {len(df_new_mov)} nuevos registros de movimientos...")
+                        df_new_mov = _compute_helper_columns(df_new_mov)
+                        start_row_mov = ws_mov.max_row + 1
                         
-                    end_row_mov = ws_mov.max_row
-                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas nuevas de movimientos...")
-                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
-                        ws_mov.row_dimensions[row[0].row].height = 20
-                        for cell in row:
-                            cell.font = century_font
-                            cell.alignment = middle_align
-                else:
-                    print("✨ No se encontraron movimientos nuevos para añadir.")
+                        for r_idx, row in df_new_mov.iterrows():
+                            row_vals = []
+                            for col_name in df_new_mov.columns:
+                                val = row[col_name]
+                                if pd.isna(val):
+                                    val = None
+                                row_vals.append(val)
+                            ws_mov.append(row_vals)
+                            
+                        end_row_mov = ws_mov.max_row
+                        print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas nuevas de movimientos...")
+                        for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                            ws_mov.row_dimensions[row[0].row].height = 20
+                            for cell in row:
+                                cell.font = century_font
+                                cell.alignment = middle_align
+                    else:
+                        print("✨ No se encontraron movimientos nuevos para añadir.")
 
                 ws_mov.sheet_view.showGridLines = False
 
