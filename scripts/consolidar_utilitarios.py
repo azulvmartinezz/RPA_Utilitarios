@@ -713,6 +713,22 @@ def consolidar_todo():
         else:
             print("⚠️ No se encontró la ruta del reporte de movimientos en .env o el archivo no existe.")
 
+        # Redimensionar tablas de Excel automáticamente al número real de filas
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for table_name, table in list(ws.tables.items()):
+                ref_parts = table.ref.split(':')
+                if len(ref_parts) == 2:
+                    start_cell = ref_parts[0]
+                    end_cell = ref_parts[1]
+                    import re
+                    m = re.match(r'^([A-Z]+)', end_cell)
+                    if m:
+                        end_col = m.group(1)
+                        new_ref = f"{start_cell}:{end_col}{ws.max_row}"
+                        table.ref = new_ref
+                        print(f"📊 Tabla '{table_name}' redimensionada automáticamente a {new_ref} en la hoja '{sheet_name}'.")
+
         wb.save(output_path)
         wb.close()
         
