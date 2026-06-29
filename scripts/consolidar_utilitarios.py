@@ -612,8 +612,8 @@ def consolidar_todo():
                     df_all = pd.concat([df_existing_mov, df_new_mov], ignore_index=True)
                     df_all = _compute_helper_columns(df_all)
                     
-                    del wb['Movimientos']
-                    ws_mov = wb.create_sheet(title='Movimientos')
+                    ws_mov = wb['Movimientos']
+                    ws_mov.delete_rows(1, ws_mov.max_row + 1)
                     headers_mov = df_all.columns.tolist()
                     ws_mov.append(headers_mov)
                     ws_mov.row_dimensions[1].height = 20
