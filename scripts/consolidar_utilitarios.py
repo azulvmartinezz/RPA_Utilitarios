@@ -527,12 +527,15 @@ def consolidar_todo():
             
             # Formatear solo las filas nuevas agregadas (Optimizado con iter_rows)
             end_row = ws_datos.max_row
-            print(f"🎨 Aplicando formato a {end_row - start_row + 1} filas nuevas...")
-            for row in ws_datos.iter_rows(min_row=start_row, max_row=end_row, min_col=1, max_col=ws_datos.max_column):
-                ws_datos.row_dimensions[row[0].row].height = 20
-                for cell in row:
-                    cell.font = century_font
-                    cell.alignment = middle_align
+            if (end_row - start_row) <= 5000:
+                print(f"🎨 Aplicando formato a {end_row - start_row + 1} filas nuevas...")
+                for row in ws_datos.iter_rows(min_row=start_row, max_row=end_row, min_col=1, max_col=ws_datos.max_column):
+                    ws_datos.row_dimensions[row[0].row].height = 20
+                    for cell in row:
+                        cell.font = century_font
+                        cell.alignment = middle_align
+            else:
+                print("⚡ Muchos registros nuevos. Omitiendo formato de celdas individuales para agilizar el proceso.")
         else:
             print("✨ No se encontraron registros nuevos para añadir.")
 
@@ -644,12 +647,15 @@ def consolidar_todo():
                         ws_mov.append(row_vals)
                     end_row_mov = ws_mov.max_row
                     
-                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
-                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
-                        ws_mov.row_dimensions[row[0].row].height = 20
-                        for cell in row:
-                            cell.font = century_font
-                            cell.alignment = middle_align
+                    if (end_row_mov - start_row_mov) <= 5000:
+                        print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
+                        for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                            ws_mov.row_dimensions[row[0].row].height = 20
+                            for cell in row:
+                                cell.font = century_font
+                                cell.alignment = middle_align
+                    else:
+                        print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
 
                 # Caso 2: La pestaña no existe (creación inicial con helpers)
                 elif not mov_sheet_exists:
@@ -676,12 +682,15 @@ def consolidar_todo():
                             ws_mov.append(row_vals)
                         end_row_mov = ws_mov.max_row
                         
-                        print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
-                        for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
-                            ws_mov.row_dimensions[row[0].row].height = 20
-                            for cell in row:
-                                cell.font = century_font
-                                cell.alignment = middle_align
+                        if (end_row_mov - start_row_mov) <= 5000:
+                            print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
+                            for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                                ws_mov.row_dimensions[row[0].row].height = 20
+                                for cell in row:
+                                    cell.font = century_font
+                                    cell.alignment = middle_align
+                        else:
+                            print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
 
                 # Caso 3: La pestaña ya existe y ya cuenta con las columnas helper (Append)
                 else:
@@ -701,12 +710,15 @@ def consolidar_todo():
                             ws_mov.append(row_vals)
                             
                         end_row_mov = ws_mov.max_row
-                        print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas nuevas de movimientos...")
-                        for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
-                            ws_mov.row_dimensions[row[0].row].height = 20
-                            for cell in row:
-                                cell.font = century_font
-                                cell.alignment = middle_align
+                        if (end_row_mov - start_row_mov) <= 5000:
+                            print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas nuevas de movimientos...")
+                            for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                                ws_mov.row_dimensions[row[0].row].height = 20
+                                for cell in row:
+                                    cell.font = century_font
+                                    cell.alignment = middle_align
+                        else:
+                            print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
                     else:
                         print("✨ No se encontraron movimientos nuevos para añadir.")
 
