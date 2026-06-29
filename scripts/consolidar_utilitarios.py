@@ -451,8 +451,9 @@ def consolidar_todo():
         
         if excel_exists:
             try:
-                # keep_vba=True preserves macros and VBA code in .xlsm files
-                wb = openpyxl.load_workbook(output_path, keep_vba=True)
+                # keep_vba=True is only required/valid for .xlsm files; using it on .xlsx corrupts the file structure
+                is_xlsm = output_path.lower().endswith('.xlsm')
+                wb = openpyxl.load_workbook(output_path, keep_vba=is_xlsm)
                 if wb is not None and 'Datos' in wb.sheetnames:
                     datos_existe = True
                 else:
