@@ -386,6 +386,7 @@ def consolidar_todo():
     df_merge['Fecha'] = pd.to_datetime(df_merge['Fecha'], errors='coerce')
     df_merge['Anio'] = df_merge['Fecha'].dt.year
     df_merge['Mes'] = df_merge['Fecha'].dt.month
+    df_merge['Semana_Mes'] = ((df_merge['Fecha'].dt.day - 1) // 7 + 1).fillna(0).astype(int)
     
     # es_ytd: Año actual y mes menor/igual al actual, o años anteriores
     df_merge['es_ytd'] = ((df_merge['Anio'] == today.year) & (df_merge['Mes'] <= today.month)) | (df_merge['Anio'] < today.year)
@@ -563,6 +564,7 @@ def consolidar_todo():
                     dt_series = pd.to_datetime(df_out['Fecha-hora Inicio'], errors='coerce')
                     df_out['Anio'] = dt_series.dt.year.fillna(0).astype(int)
                     df_out['Mes_Num'] = dt_series.dt.month.fillna(0).astype(int)
+                    df_out['Semana_Mes'] = ((dt_series.dt.day - 1) // 7 + 1).fillna(0).astype(int)
                     
                     df_out['Fecha_Solo'] = dt_series.dt.date
                     dow_map = {
