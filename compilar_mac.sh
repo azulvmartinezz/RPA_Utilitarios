@@ -56,29 +56,26 @@ PYINSTALLER_CONFIG_DIR="$PYINSTALLER_CONFIG_DIR" "$PYINSTALLER_BIN" -y --noconso
   --add-data "$TCL_DATA_DIR:_tcl_data" \
   --add-data "$TK_DATA_DIR:_tk_data" \
   --paths . \
-  --collect-all "cryptography" \
-  --collect-all "customtkinter" \
-  --collect-all google.cloud.bigquery \
-  --collect-all google.cloud.storage \
-  --collect-all google.api_core \
-  --collect-all google.auth \
-  --collect-all google.cloud \
-  --collect-all selenium \
-  --collect-all undetected_chromedriver \
-  --collect-all msal \
-  --collect-all O365 \
-  --collect-all requests \
-  --collect-all twocaptcha \
-  --collect-all bs4 \
-  --collect-all webdriver_manager \
-  --collect-all pyarrow \
-  --collect-all db_dtypes \
-  --collect-all openpyxl \
-  --collect-all lxml \
-  --collect-all xlrd \
+  --copy-metadata "google-cloud-bigquery" \
+  --copy-metadata "google-cloud-storage" \
+  --hidden-import "cryptography" \
+  --hidden-import "customtkinter" \
   --hidden-import "google.cloud.bigquery" \
   --hidden-import "google.cloud.storage" \
   --hidden-import "google.cloud" \
+  --hidden-import "pyarrow" \
+  --hidden-import "db_dtypes" \
+  --hidden-import "undetected_chromedriver" \
+  --hidden-import "selenium" \
+  --hidden-import "O365" \
+  --hidden-import "msal" \
+  --hidden-import "requests" \
+  --hidden-import "twocaptcha" \
+  --hidden-import "bs4" \
+  --hidden-import "webdriver_manager" \
+  --hidden-import "openpyxl" \
+  --hidden-import "lxml" \
+  --hidden-import "xlrd" \
   --workpath "$PYINSTALLER_WORK_DIR" \
   --specpath "$PYINSTALLER_SPEC_DIR" \
   --distpath RPA_Utilitarios_Ejecutable_Mac \
