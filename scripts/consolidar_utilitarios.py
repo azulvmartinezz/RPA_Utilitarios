@@ -564,7 +564,7 @@ def consolidar_todo():
                     df_out['Anio'] = dt_series.dt.year.fillna(0).astype(int)
                     df_out['Mes_Num'] = dt_series.dt.month.fillna(0).astype(int)
                     
-                    fecha_solo = dt_series.dt.date
+                    df_out['Fecha_Solo'] = dt_series.dt.date
                     dow_map = {
                         0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes',
                         5: 'Sábado', 6: 'Domingo'
@@ -576,14 +576,16 @@ def consolidar_todo():
                     is_sab_tarde = (dia_nombre == 'Sábado') & (hora_frac >= 16.0)
                     is_sem_noche = (~dia_nombre.isin(['Sábado', 'Domingo'])) & (hora_frac >= 20.0)
                     
-                    is_dom_first = is_dom & ~df_out[is_dom].duplicated(subset=['ECO', fecha_solo])
+                    is_dom_first = is_dom & ~df_out[is_dom].duplicated(subset=['ECO', 'Fecha_Solo'])
                     df_out['Es_Domingo_Aux'] = is_dom_first.reindex(df_out.index, fill_value=False).astype(int)
                     
-                    is_sab_tarde_first = is_sab_tarde & ~df_out[is_sab_tarde].duplicated(subset=['ECO', fecha_solo])
+                    is_sab_tarde_first = is_sab_tarde & ~df_out[is_sab_tarde].duplicated(subset=['ECO', 'Fecha_Solo'])
                     df_out['Es_Sabado_Tarde_Aux'] = is_sab_tarde_first.reindex(df_out.index, fill_value=False).astype(int)
                     
-                    is_sem_noche_first = is_sem_noche & ~df_out[is_sem_noche].duplicated(subset=['ECO', fecha_solo])
+                    is_sem_noche_first = is_sem_noche & ~df_out[is_sem_noche].duplicated(subset=['ECO', 'Fecha_Solo'])
                     df_out['Es_Semana_Noche_Aux'] = is_sem_noche_first.reindex(df_out.index, fill_value=False).astype(int)
+                    
+                    df_out.drop(columns=['Fecha_Solo'], inplace=True)
                     return df_out
 
                 mov_sheet_exists = 'Movimientos' in wb.sheetnames
