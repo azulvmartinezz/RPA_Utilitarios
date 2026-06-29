@@ -601,6 +601,8 @@ def consolidar_todo():
                         print(f"⚠️ Error al leer movimientos existentes ({e}). Se reescribirá la pestaña.")
                         mov_sheet_exists = False
                         df_new_mov = df_mov_raw
+                else:
+                    df_new_mov = df_mov_raw
 
                 # Caso 1: La pestaña ya existe pero NO tiene las columnas helper (Backfill)
                 if mov_sheet_exists and not has_helpers:
