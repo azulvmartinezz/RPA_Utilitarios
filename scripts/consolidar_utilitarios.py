@@ -340,16 +340,18 @@ def consolidar_todo():
             col_importe = next((c for c in df_mantenimientos_raw.columns if any(kw in c.lower() for kw in ['importe', 'precioneto', 'costo'])), None)
             
             if col_eco and col_fecha and col_importe:
-                df_mantenimientos['ECO'] = df_mantenimientos_raw[col_eco].apply(_normalize_eco)
-                df_mantenimientos['Fecha'] = pd.to_datetime(df_mantenimientos_raw[col_fecha], errors='coerce')
+                # Quitamos duplicados solo si la fila completa en el Excel crudo es idéntica
+                df_mantenimientos_clean_raw = df_mantenimientos_raw.drop_duplicates().copy()
+                
+                df_mantenimientos['ECO'] = df_mantenimientos_clean_raw[col_eco].apply(_normalize_eco)
+                df_mantenimientos['Fecha'] = pd.to_datetime(df_mantenimientos_clean_raw[col_fecha], errors='coerce')
                 df_mantenimientos['Concepto'] = 'MANTENIMIENTO'
                 df_mantenimientos['Tipo'] = None
-                df_mantenimientos['Importe'] = pd.to_numeric(df_mantenimientos_raw[col_importe], errors='coerce')
+                df_mantenimientos['Importe'] = pd.to_numeric(df_mantenimientos_clean_raw[col_importe], errors='coerce')
                 df_mantenimientos['Sistema'] = 'Excel Mantenimientos'
                 df_mantenimientos['Cantidad'] = None
                 df_mantenimientos = df_mantenimientos.dropna(subset=['Importe', 'Fecha', 'ECO'])
                 df_mantenimientos = df_mantenimientos[df_mantenimientos['ECO'].str.match(r'^(AU|CA)-\d{3}(?:\s*LZC)?$', na=False)].copy()
-                df_mantenimientos = df_mantenimientos.drop_duplicates().copy()
                 print(f"✅ Procesados {len(df_mantenimientos)} registros de Mantenimiento local.")
             else:
                 print("⚠️ No se pudieron identificar las columnas requeridas (ECO, Fecha, Importe/PrecioNeto) en Mantenimientos.")
@@ -371,6 +373,11 @@ def consolidar_todo():
     
     # Hacer el merge
     df_merge = pd.merge(df_maestra, df_consumos_total, on='ECO_key', how='outer', suffixes=('_maestra', '_consumo'))
+    
+    # Rellenar valores vacíos de dimensiones con 'SIN INFORMACIÓN' para evitar exclusión en SUMIFS (*)
+    for col in ['Dirección', 'Empresa', 'Sucursal']:
+        if col in df_merge.columns:
+            df_merge[col] = df_merge[col].fillna('SIN INFORMACIÓN')
     
     # Resolver columna ECO unificada (COALESCE en SQL)
     df_merge['ECO'] = df_merge['ECO_maestra'].fillna(df_merge['ECO_consumo'])
@@ -508,18 +515,46 @@ def consolidar_todo():
                 cell.alignment = middle_align
         else:
             ws_datos = wb['Datos']
+            # Detectar si el usuario borró los datos manualmente en Excel
+            is_empty_data = True
+            if ws_datos.max_row > 1:
+                for r in range(2, min(ws_datos.max_row + 1, 100)):
+                    if any(ws_datos.cell(row=r, column=c).value is not None for c in range(1, ws_datos.max_column + 1)):
+                        is_empty_data = False
+                        break
+                if is_empty_data:
+                    print("🧹 Detectadas celdas vacías fantasma en Datos. Reseteando contador de filas...")
+                    ws_datos.delete_rows(2, ws_datos.max_row)
 
         # Escribir filas nuevas
         if not df_new.empty:
             print(f"📥 Insertando {len(df_new)} nuevos registros...")
+            
+            # Obtener encabezados actuales de la hoja
+            existing_headers = [ws_datos.cell(row=1, column=c).value for c in range(1, ws_datos.max_column + 1)]
+            if not existing_headers or not existing_headers[0]:
+                existing_headers = df_new.columns.tolist()
+            
+            # Si hay columnas en df_new que no están en el Excel, las agregamos al final (a la derecha)
+            for col in df_new.columns:
+                if col not in existing_headers:
+                    existing_headers.append(col)
+            
+            # Escribir los encabezados actualizados en la fila 1
+            ws_datos.row_dimensions[1].height = 20
+            for col_idx, header in enumerate(existing_headers, 1):
+                cell = ws_datos.cell(row=1, column=col_idx, value=header)
+                cell.font = century_bold
+                cell.fill = green_fill
+                cell.alignment = middle_align
+            
             start_row = ws_datos.max_row + 1
             
             # openpyxl append row
             for r_idx, row in df_new.iterrows():
                 row_vals = []
-                for col_name in df_merge.columns:
-                    val = row[col_name]
-                    # Convert pandas NA/NaT/NaN to None for openpyxl
+                for col_name in existing_headers:
+                    val = row.get(col_name, None)
                     if pd.isna(val):
                         val = None
                     row_vals.append(val)
@@ -577,6 +612,11 @@ def consolidar_todo():
                     df_out['Mes_Num'] = dt_series.dt.month.fillna(0).astype(int)
                     df_out['Semana_Mes'] = ((dt_series.dt.day - 1) // 7 + 1).fillna(0).astype(int)
                     
+                    # Rellenar vacíos con 'SIN INFORMACIÓN'
+                    for col in ['Dirección', 'Empresa', 'Sucursal']:
+                        if col in df_out.columns:
+                            df_out[col] = df_out[col].fillna('SIN INFORMACIÓN')
+                            
                     df_out['Fecha_Solo'] = dt_series.dt.date
                     dow_map = {
                         0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes',
@@ -607,15 +647,15 @@ def consolidar_todo():
 
                 if mov_sheet_exists:
                     try:
-                        df_existing_mov = pd.read_excel(output_path, sheet_name='Movimientos')
-                        has_helpers = 'Anio' in df_existing_mov.columns
-                        existing_mov_sigs = set(_get_mov_sigs(df_existing_mov))
-                        new_mov_sigs = _get_mov_sigs(df_mov_raw)
-                        df_new_mov = df_mov_raw[~new_mov_sigs.isin(existing_mov_sigs)].copy()
+                         df_existing_mov = pd.read_excel(output_path, sheet_name='Movimientos')
+                         has_helpers = 'Semana_Mes' in df_existing_mov.columns
+                         existing_mov_sigs = set(_get_mov_sigs(df_existing_mov))
+                         new_mov_sigs = _get_mov_sigs(df_mov_raw)
+                         df_new_mov = df_mov_raw[~new_mov_sigs.isin(existing_mov_sigs)].copy()
                     except Exception as e:
-                        print(f"⚠️ Error al leer movimientos existentes ({e}). Se reescribirá la pestaña.")
-                        mov_sheet_exists = False
-                        df_new_mov = df_mov_raw
+                         print(f"⚠️ Error al leer movimientos existentes ({e}). Se reescribirá la pestaña.")
+                         mov_sheet_exists = False
+                         df_new_mov = df_mov_raw
                 else:
                     df_new_mov = df_mov_raw
 
@@ -695,15 +735,44 @@ def consolidar_todo():
                 # Caso 3: La pestaña ya existe y ya cuenta con las columnas helper (Append)
                 else:
                     ws_mov = wb['Movimientos']
+                    # Detectar si el usuario borró los datos manualmente en Excel
+                    is_empty_mov = True
+                    if ws_mov.max_row > 1:
+                        for r in range(2, min(ws_mov.max_row + 1, 100)):
+                            if any(ws_mov.cell(row=r, column=c).value is not None for c in range(1, ws_mov.max_column + 1)):
+                                is_empty_mov = False
+                                break
+                        if is_empty_mov:
+                            print("🧹 Detectadas celdas vacías fantasma en Movimientos. Reseteando contador de filas...")
+                            ws_mov.delete_rows(2, ws_mov.max_row)
+
                     if not df_new_mov.empty:
                         print(f"📥 Insertando {len(df_new_mov)} nuevos registros de movimientos...")
                         df_new_mov = _compute_helper_columns(df_new_mov)
+                        
+                        # Leer encabezados actuales de Movimientos
+                        existing_headers_mov = [ws_mov.cell(row=1, column=c).value for c in range(1, ws_mov.max_column + 1)]
+                        if not existing_headers_mov or not existing_headers_mov[0]:
+                            existing_headers_mov = df_new_mov.columns.tolist()
+                        
+                        # Agregar nuevas columnas al final
+                        for col in df_new_mov.columns:
+                            if col not in existing_headers_mov:
+                                existing_headers_mov.append(col)
+                        
+                        # Escribir encabezados actualizados en la fila 1
+                        for col_idx, header in enumerate(existing_headers_mov, 1):
+                            cell = ws_mov.cell(row=1, column=col_idx, value=header)
+                            cell.font = century_bold
+                            cell.fill = green_fill
+                            cell.alignment = middle_align
+                        
                         start_row_mov = ws_mov.max_row + 1
                         
                         for r_idx, row in df_new_mov.iterrows():
                             row_vals = []
-                            for col_name in df_new_mov.columns:
-                                val = row[col_name]
+                            for col_name in existing_headers_mov:
+                                val = row.get(col_name, None)
                                 if pd.isna(val):
                                     val = None
                                 row_vals.append(val)
