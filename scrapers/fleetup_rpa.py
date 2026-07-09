@@ -36,7 +36,7 @@ def _guardar_diagnostico(driver, stage_name):
     except Exception as e:
         print(f"⚠️ No se pudo guardar diagnóstico ({e})")
 
-def main():
+def main(headless=True):
     print("Iniciando RPA para FleetUp...")
     
     if not FLEETUP_USER or not FLEETUP_PASSWORD:
@@ -44,7 +44,8 @@ def main():
         return
 
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    if headless:
+        chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
@@ -272,8 +273,8 @@ def main():
             print("ERROR: No se detectó el archivo descargado en descargas_temporales.")
             return
             
-        # Subir a GCS y borrar local
-        print(f"Subiendo {downloaded_file} a GCS para el periodo {prev_year}-{prev_month}...")
+        # Respaldar localmente y borrar temporal
+        print(f"Respaldando {downloaded_file} localmente para el periodo {prev_year}-{prev_month}...")
         gcs_uploader.subir_y_borrar_local(downloaded_file, 'FleetUp', year=prev_year, month=prev_month)
         print("¡Proceso FleetUp RPA completado con éxito!")
         

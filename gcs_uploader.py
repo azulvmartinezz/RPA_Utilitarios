@@ -3,7 +3,6 @@ import shutil
 import hashlib
 import pandas as pd
 from datetime import datetime
-from google.cloud import storage
 from dotenv import load_dotenv
 import re
 
@@ -16,6 +15,14 @@ def _sanitize_path_component(value, default="sin_empresa"):
     s = re.sub(r"\s+", "_", s)
     s = re.sub(r"[^A-Za-z0-9._-]", "", s)
     return s or default
+
+
+def _resolve_local_backup_root(onedrive_dir):
+    if onedrive_dir and os.path.exists(onedrive_dir):
+        return onedrive_dir, "OneDrive"
+    fallback_dir = os.path.join(os.getcwd(), "respaldos_locales")
+    os.makedirs(fallback_dir, exist_ok=True)
+    return fallback_dir, "Local"
 
 def obtener_mes_año_real(archivo, sistema):
     try:
@@ -84,7 +91,7 @@ def obtener_mes_año_real(archivo, sistema):
         
     return None, None
 
-def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=None):
+def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=None, name_tag=None):
     load_dotenv()
     onedrive_dir = os.getenv('ONEDRIVE_RESPALDOS_DIR')
     
@@ -105,57 +112,31 @@ def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=
     # Clave determinística por contenido
     with open(archivo_local, "rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()[:12]
-    nombre_limpio = f"{sistema.lower()}_{digest}_{nombre_original}"
+    original_base, original_ext = os.path.splitext(nombre_original)
+    sanitized_tag = _sanitize_path_component(name_tag, default="sin_rango") if name_tag else None
+    nombre_partes = [sistema.lower()]
+    if sanitized_tag and sanitized_tag not in original_base:
+        nombre_partes.append(sanitized_tag)
+    nombre_partes.extend([original_base, digest])
+    nombre_limpio = "_".join(nombre_partes) + original_ext
 
-    # 2. Si hay ruta de OneDrive configurada, guardar localmente en OneDrive y saltar GCS
-    if onedrive_dir and os.path.exists(onedrive_dir):
-        try:
-            if empresa:
-                empresa_dir = _sanitize_path_component(empresa)
-                dest_dir = os.path.join(onedrive_dir, sistema, str(anio), f"{int(mes):02d}", empresa_dir)
-            else:
-                dest_dir = os.path.join(onedrive_dir, sistema, str(anio), f"{int(mes):02d}")
-                
-            os.makedirs(dest_dir, exist_ok=True)
-            dest_path = os.path.join(dest_dir, nombre_limpio)
-            
-            # Copiar a la carpeta de OneDrive
-            shutil.copy(archivo_local, dest_path)
-            print(f"[OneDrive] Archivo guardado localmente en OneDrive: {dest_path}")
-            
-            # Eliminar temporal
-            os.remove(archivo_local)
-            print(f"🗑️ Archivo temporal '{nombre_original}' borrado.")
-            return
-        except Exception as e:
-            print(f"❌ Error al guardar localmente en OneDrive: {e}")
-            # Continuar con GCS si falla la copia local
+    backup_root, backup_label = _resolve_local_backup_root(onedrive_dir)
 
-    project_id = os.getenv('GCP_PROJECT_ID')
-    bucket_name = os.getenv('GCP_BUCKET_RESPALDOS', f"{project_id}-respaldos-rpa")
-    
-    if not project_id:
-        print("⚠️ No se puede subir a GCS: Falta GCP_PROJECT_ID en el .env")
-        return
-        
     try:
-        client = storage.Client(project=project_id)
-        bucket = client.bucket(bucket_name)
-        
+        dest_dir = os.path.join(backup_root, sistema, str(anio), f"{int(mes):02d}")
+        os.makedirs(dest_dir, exist_ok=True)
+
         if empresa:
-            empresa_dir = _sanitize_path_component(empresa)
-            ruta_gcs = f"{sistema}/{empresa_dir}/{anio}/{mes}/{nombre_limpio}"
+            empresa_limpia = _sanitize_path_component(empresa)
+            nombre_final = f"{empresa_limpia}_{nombre_limpio}"
         else:
-            ruta_gcs = f"{sistema}/{anio}/{mes}/{nombre_limpio}"
-        
-        print(f"☁️ Subiendo a la nube: gs://{bucket_name}/{ruta_gcs}")
-        blob = bucket.blob(ruta_gcs)
-        blob.upload_from_filename(archivo_local)
-        print(f"✅ Subida exitosa. Si el contenido ya existía, se actualizó el mismo respaldo.")
-        
-        # Limpieza final: Eliminar el archivo local para no ensuciar la Mac
+            nombre_final = nombre_limpio
+
+        dest_path = os.path.join(dest_dir, nombre_final)
+        shutil.copy(archivo_local, dest_path)
+        print(f"[{backup_label}] Archivo guardado localmente: {dest_path}")
         os.remove(archivo_local)
-        print(f"🗑️ Archivo temporal '{nombre_original}' borrado de la Mac.")
-        
+        print(f"🗑️ Archivo temporal '{nombre_original}' borrado.")
+        return
     except Exception as e:
-        print(f"❌ Error al interactuar con Google Cloud: {e}")
+        print(f"❌ Error al guardar respaldo local: {e}")

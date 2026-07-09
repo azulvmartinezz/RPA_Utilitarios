@@ -2,6 +2,7 @@ import os
 import json
 import time
 import datetime
+import glob
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -64,6 +65,108 @@ def _esta_en_login(driver):
         return len(driver.find_elements(By.ID, "loginform")) > 0
     except Exception:
         return False
+
+
+def _resolve_chrome_binary():
+    env_binary = os.getenv("CHROME_BINARY")
+    candidates = [
+        env_binary,
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ]
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _build_chrome_options(headless, descargas_dir):
+    chrome_options = Options()
+    chrome_options.page_load_strategy = 'eager'
+
+    if headless:
+        chrome_options.add_argument("--headless=new")
+
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--remote-debugging-port=0")
+
+    profile_path = os.path.join(os.getcwd(), "chrome_profile", "supramax")
+    os.makedirs(profile_path, exist_ok=True)
+    chrome_options.add_argument(f"--user-data-dir={profile_path}")
+
+    chrome_binary = _resolve_chrome_binary()
+    if chrome_binary:
+        chrome_options.binary_location = chrome_binary
+        print(f"Usando binario de Chrome: {chrome_binary}")
+
+    prefs = {
+        "download.default_directory": descargas_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": True
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
+    return chrome_options
+
+
+def _find_cached_chromedriver():
+    pattern = os.path.expanduser("~/.wdm/drivers/chromedriver/**/chromedriver")
+    candidates = [path for path in glob.glob(pattern, recursive=True) if os.path.isfile(path)]
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
+def _create_driver(chrome_options):
+    startup_errors = []
+
+    try:
+        print("Intentando iniciar Chrome con Selenium Manager...")
+        return webdriver.Chrome(options=chrome_options)
+    except Exception as exc:
+        startup_errors.append(f"Selenium Manager: {exc}")
+        print(f"⚠️ Selenium Manager falló: {exc}")
+
+    driver_path = _find_cached_chromedriver()
+    if driver_path:
+        try:
+            try:
+                os.chmod(driver_path, os.stat(driver_path).st_mode | 0o111)
+            except OSError:
+                pass
+            print(f"Intentando iniciar Chrome con ChromeDriver cacheado: {driver_path}")
+            return webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+        except Exception as exc:
+            startup_errors.append(f"ChromeDriver cacheado ({driver_path}): {exc}")
+
+    driver_path = None
+    try:
+        if not hasattr(sys, '_chromedriver_path'):
+            sys._chromedriver_path = ChromeDriverManager().install()
+        driver_path = sys._chromedriver_path
+        try:
+            os.chmod(driver_path, os.stat(driver_path).st_mode | 0o111)
+        except OSError:
+            pass
+        print(f"Intentando iniciar Chrome con ChromeDriver local: {driver_path}")
+        return webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+    except Exception as exc:
+        startup_errors.append(f"ChromeDriverManager ({driver_path or 'sin ruta'}): {exc}")
+
+    hint = (
+        "No se pudo iniciar Chrome para Supramax.\n"
+        + "\n".join(f"  - {item}" for item in startup_errors)
+        + "\nSugerencias: valida que Google Chrome abra normalmente, cierra instancias previas de Chrome/ChromeDriver "
+          "y, si el error menciona 'status code was: -9', borra la caché de driver en ~/.wdm/drivers/chromedriver "
+          "para forzar una reinstalación limpia."
+    )
+    raise RuntimeError(hint)
 
 
 def _intentar_submit_login(driver, wait, pwd_input):
@@ -196,12 +299,8 @@ def _scrape_active_vehicles(driver, wait):
     return tags_map
 
 
-def process_account(username, password, fini_override=None, ffin_override=None, meses_override=None, meses_meta=None, empresa=None, only_tags=False, with_tags=False):
+def process_account(driver, username, password, fini_override=None, ffin_override=None, meses_override=None, meses_meta=None, empresa=None, only_tags=False, with_tags=False):
     print(f"\n--- Iniciando proceso para cuenta Supramax: {username} ---")
-
-    chrome_options = Options()
-    chrome_options.page_load_strategy = 'eager'
-    # chrome_options.add_argument("--headless")
 
     descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
     if not os.path.exists(descargas_dir):
@@ -213,26 +312,6 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
                 try: os.remove(os.path.join(descargas_dir, f))
                 except: pass
 
-    prefs = {
-        "download.default_directory": descargas_dir,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True
-    }
-    chrome_options.add_experimental_option("prefs", prefs)
-
-    import sys
-    if not hasattr(sys, '_chromedriver_path'):
-        sys._chromedriver_path = ChromeDriverManager().install()
-    service = Service(sys._chromedriver_path)
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    
-    # Evitar HTTP read timeouts (Selenium default es 120s) al procesar reportes pesados
-    if hasattr(driver, "command_executor") and hasattr(driver.command_executor, "_client_config"):
-        driver.command_executor._client_config.timeout = 310
-
-    driver.set_page_load_timeout(180)   # Evitar quedarse trabado indefinidamente si el navegador espera elementos secundarios
-    driver.set_script_timeout(180)
     wait = WebDriverWait(driver, 15)
     long_wait = WebDriverWait(driver, 180)
 
@@ -445,14 +524,14 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
                         tiempo_espera += 1
 
                     if archivo_descargado:
-                        print(f"✅ Archivo descargado. Subiendo a BigQuery...")
+                        print("✅ Archivo descargado. Procesando consumos...")
                         from bigquery import bq_ingestion
                         try:
                             df_limpio = bq_ingestion.procesar_supramax(archivo_descargado, empresa=empresa or username)
                             if df_limpio is not None:
                                 bq_ingestion.ingest_to_bigquery(df_limpio)
                         except Exception as e:
-                            print(f"❌ Error en ingesta a BQ: {e}")
+                            print(f"❌ Error al procesar consumos descargados: {e}")
                         finally:
                             gcs_uploader.subir_y_borrar_local(archivo_descargado, 'Supramax', empresa=empresa or username)
                     else:
@@ -484,20 +563,21 @@ def process_account(username, password, fini_override=None, ffin_override=None, 
         print(f"❌ Ocurrió un error crítico en la cuenta {username}: {e}")
         try: _guardar_diagnostico(driver, descargas_dir, username, "error_critico")
         except: pass
-    finally:
-        try: driver.quit()
-        except: pass
 
     return scraped_tags if (only_tags or with_tags) else fallos
 
 
-def main(fini_override=None, ffin_override=None):
+def main(fini_override=None, ffin_override=None, headless=False):
     import argparse
     parser = argparse.ArgumentParser(description="RPA para Supramax")
     parser.add_argument("--only-tags", action="store_true", help="Solo descarga y actualiza la lista de tags/vehículos activos")
     parser.add_argument("--with-tags", action="store_true", help="Descarga los reportes de consumos y actualiza la lista de tags/vehículos activos")
+    parser.add_argument("--headless", action="store_true", help="Ejecutar en modo silencioso")
     
     args, unknown = parser.parse_known_args()
+    
+    if args.headless:
+        headless = True
 
     print("Iniciando RPA para Supramax...")
     
@@ -513,25 +593,40 @@ def main(fini_override=None, ffin_override=None):
         print(f"ERROR: El contenido de SUPRAMAX_CREDENTIALS no es un JSON válido. ({e})")
         return
     
+    descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
+    os.makedirs(descargas_dir, exist_ok=True)
+    chrome_options = _build_chrome_options(headless, descargas_dir)
+    driver = _create_driver(chrome_options)
+    
+    if hasattr(driver, "command_executor") and hasattr(driver.command_executor, "_client_config"):
+        driver.command_executor._client_config.timeout = 310
+    driver.set_page_load_timeout(180)
+    driver.set_script_timeout(180)
+    
     all_scraped_tags = {}
 
-    # Iterar por cada cuenta
-    for idx, acc in enumerate(credenciales):
-        print(f"\n{'='*50}")
-        print(f"🔄 PROCESANDO CUENTA {idx + 1} DE {len(credenciales)}")
-        print(f"{'='*50}")
-        fallos = process_account(
-            acc['Usuario'], 
-            acc['Contraseña'], 
-            fini_override=fini_override, 
-            ffin_override=ffin_override, 
-            empresa=acc.get('Empresa'),
-            only_tags=args.only_tags,
-            with_tags=args.with_tags
-        )
-        # Si process_account devuelve el mapa de tags cuando solo_tags o con_tags están activados
-        if isinstance(fallos, dict):
-            all_scraped_tags.update(fallos)
+    try:
+        # Iterar por cada cuenta
+        for idx, acc in enumerate(credenciales):
+            print(f"\n{'='*50}")
+            print(f"🔄 PROCESANDO CUENTA {idx + 1} DE {len(credenciales)}")
+            print(f"{'='*50}")
+            fallos = process_account(
+                driver,
+                acc['Usuario'], 
+                acc['Contraseña'], 
+                fini_override=fini_override, 
+                ffin_override=ffin_override, 
+                empresa=acc.get('Empresa'),
+                only_tags=args.only_tags,
+                with_tags=args.with_tags
+            )
+            # Si process_account devuelve el mapa de tags cuando solo_tags o con_tags están activados
+            if isinstance(fallos, dict):
+                all_scraped_tags.update(fallos)
+    finally:
+        try: driver.quit()
+        except: pass
         
     if (args.only_tags or args.with_tags) and all_scraped_tags:
         output_dir = "HTML_SUPRAMAX"

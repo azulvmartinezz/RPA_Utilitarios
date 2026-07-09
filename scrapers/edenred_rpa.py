@@ -2,6 +2,7 @@ import os
 import time
 import datetime
 import json
+import glob
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -13,6 +14,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from twocaptcha import TwoCaptcha
 from webdriver_manager.chrome import ChromeDriverManager
+import sys
 
 # Cargar variables de entorno
 load_dotenv()
@@ -70,24 +72,119 @@ def solve_recaptcha(sitekey, url):
         print(f"Error resolviendo captcha: {e}")
         return None
 
-def main(meses_override=None):
+
+def _resolve_chrome_binary():
+    env_binary = os.getenv("CHROME_BINARY")
+    candidates = [
+        env_binary,
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ]
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _find_cached_chromedriver():
+    pattern = os.path.expanduser("~/.wdm/drivers/chromedriver/**/chromedriver")
+    candidates = [path for path in glob.glob(pattern, recursive=True) if os.path.isfile(path)]
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
+def _cleanup_profile_locks(profile_path):
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        lock_path = os.path.join(profile_path, name)
+        try:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+        except OSError:
+            pass
+
+
+def _build_chrome_options(headless):
+    chrome_options = Options()
+    if headless:
+        chrome_options.add_argument("--headless=new")
+
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--remote-debugging-port=0")
+
+    profile_path = os.path.join(os.getcwd(), "chrome_profile", "edenred")
+    os.makedirs(profile_path, exist_ok=True)
+    _cleanup_profile_locks(profile_path)
+    chrome_options.add_argument(f"--user-data-dir={profile_path}")
+
+    chrome_binary = _resolve_chrome_binary()
+    if chrome_binary:
+        chrome_options.binary_location = chrome_binary
+        print(f"Usando binario de Chrome: {chrome_binary}")
+
+    return chrome_options
+
+
+def _create_driver(chrome_options):
+    startup_errors = []
+
+    try:
+        print("Intentando iniciar Chrome con Selenium Manager...")
+        return webdriver.Chrome(options=chrome_options)
+    except Exception as exc:
+        startup_errors.append(f"Selenium Manager: {exc}")
+        print(f"⚠️ Selenium Manager falló: {exc}")
+
+    driver_path = _find_cached_chromedriver()
+    if driver_path:
+        try:
+            try:
+                os.chmod(driver_path, os.stat(driver_path).st_mode | 0o111)
+            except OSError:
+                pass
+            print(f"Intentando iniciar Chrome con ChromeDriver cacheado: {driver_path}")
+            return webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+        except Exception as exc:
+            startup_errors.append(f"ChromeDriver cacheado ({driver_path}): {exc}")
+
+    driver_path = None
+    try:
+        if not hasattr(sys, "_edenred_chromedriver_path"):
+            sys._edenred_chromedriver_path = ChromeDriverManager().install()
+        driver_path = sys._edenred_chromedriver_path
+        try:
+            os.chmod(driver_path, os.stat(driver_path).st_mode | 0o111)
+        except OSError:
+            pass
+        print(f"Intentando iniciar Chrome con ChromeDriver local: {driver_path}")
+        return webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+    except Exception as exc:
+        startup_errors.append(f"ChromeDriverManager ({driver_path or 'sin ruta'}): {exc}")
+
+    hint = (
+        "No se pudo iniciar Chrome para Edenred.\n"
+        + "\n".join(f"  - {item}" for item in startup_errors)
+        + "\nSugerencias: valida que Google Chrome abra normalmente, cierra instancias previas de Chrome/ChromeDriver "
+          "y, si el error menciona 'status code was: -9', borra la caché de driver en ~/.wdm/drivers/chromedriver "
+          "para forzar una reinstalacion limpia."
+    )
+    raise RuntimeError(hint)
+
+def main(meses_override=None, headless=False):
     print("Iniciando RPA para Edenred...")
     
     if not TWOCAPTCHA_API_KEY:
         print("ERROR: Por favor agrega tu TWOCAPTCHA_API_KEY al archivo .env")
         return
 
-    chrome_options = Options()
-    
-    # Crear carpeta para el perfil de Chrome (mantiene sesión activa y evade verificaciones continuas)
-    profile_path = os.path.join(os.getcwd(), "edenred_profile")
-    if not os.path.exists(profile_path):
-        os.makedirs(profile_path)
-    chrome_options.add_argument(f"--user-data-dir={profile_path}")
-    
-    # Ejecutando con Google Chrome
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+    chrome_options = _build_chrome_options(headless)
+    driver = _create_driver(chrome_options)
     wait = WebDriverWait(driver, 15)
     
     url = os.getenv('EDENRED_URL')

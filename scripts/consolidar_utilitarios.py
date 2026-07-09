@@ -167,6 +167,405 @@ def _find_first_column(columns, *candidates):
                 return col
     return None
 
+
+def _resolve_movimientos_sources(mov_path):
+    if not mov_path:
+        return []
+
+    if os.path.isfile(mov_path):
+        return [mov_path]
+
+    if os.path.isdir(mov_path):
+        encontrados = []
+        for root, _, files in os.walk(mov_path):
+            for file_name in files:
+                lower_name = file_name.lower()
+                if file_name.startswith("~$"):
+                    continue
+                if lower_name.endswith((".xls", ".xlsx", ".xlsm")):
+                    encontrados.append(os.path.join(root, file_name))
+        return sorted(encontrados, key=os.path.getmtime)
+
+    return []
+
+
+def _resolve_output_path():
+    output_path = os.getenv('EXCEL_OUTPUT_PATH')
+    if not output_path:
+        output_dir = os.path.join(PROJECT_ROOT, "Reportes_Ejecutable")
+        os.makedirs(output_dir, exist_ok=True)
+        return os.path.join(output_dir, "Reporte_Dashboard_Final.xlsx")
+
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    return output_path
+
+
+def actualizar_movimientos_solo():
+    print("=== INICIANDO ACTUALIZACIÓN LOCAL DE MOVIMIENTOS ===")
+
+    mov_path = os.getenv('EXCEL_MOV_NOLABORALES_PATH')
+    mov_sources = _resolve_movimientos_sources(mov_path)
+    if not mov_sources:
+        print("⚠️ No se encontró una ruta válida para movimientos fuera de horario en .env.")
+        return
+
+    output_path = _resolve_output_path()
+
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+
+        century_font = Font(name="Century Gothic")
+        century_bold = Font(name="Century Gothic", bold=True)
+        middle_align = Alignment(vertical="center")
+        green_fill = PatternFill(start_color="E4EDEC", end_color="E4EDEC", fill_type="solid")
+
+        excel_exists = os.path.exists(output_path)
+        wb = None
+        if excel_exists:
+            file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+            print(f"📄 Excel final detectado ({file_size_mb:.1f} MB): {output_path}")
+            print("🔎 Revisando primero la hoja Movimientos para evitar abrir todo el workbook si no hay cambios...")
+
+        print(f"🚗 Procesando movimientos fuera de horario laboral desde {len(mov_sources)} archivo(s)...")
+        mov_frames = []
+        for source_path in mov_sources:
+            try:
+                df_mov_source = pd.read_excel(source_path, sheet_name='Historico')
+                df_mov_source['Archivo_Origen'] = os.path.basename(source_path)
+                mov_frames.append(df_mov_source)
+            except Exception as source_exc:
+                print(f"  ⚠️ No se pudo leer Historico en {os.path.basename(source_path)}: {source_exc}")
+
+        if not mov_frames:
+            raise ValueError("No se pudo leer ningun archivo valido de movimientos.")
+
+        df_mov_raw = pd.concat(mov_frames, ignore_index=True).drop_duplicates().copy()
+        df_mov_raw['ECO'] = df_mov_raw['ECO'].apply(_normalize_eco)
+        df_mov_raw = df_mov_raw[df_mov_raw['ECO'].str.match(r'^(AU|CA)-\d{3}(?:\s*LZC)?$', na=False)].copy()
+
+        def _get_mov_sigs(df):
+            ecos = df['ECO'].fillna('').astype(str).str.strip()
+            f_ini = pd.to_datetime(df['Fecha-hora Inicio'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
+            f_fin = pd.to_datetime(df['Fecha-hora Término'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
+            usuarios = df['Usuario'].fillna('').astype(str).str.strip().str.upper()
+            distancias = pd.to_numeric(df['Distancia(KM)'], errors='coerce').fillna(0).round(2).astype(str)
+            return ecos + "_" + f_ini + "_" + f_fin + "_" + usuarios + "_" + distancias
+
+        def _compute_helper_columns(df):
+            if df.empty:
+                return df.copy()
+            df_out = df.copy()
+            dt_series = pd.to_datetime(df_out['Fecha-hora Inicio'], errors='coerce')
+            df_out['Anio'] = dt_series.dt.year.fillna(0).astype(int)
+            df_out['Mes_Num'] = dt_series.dt.month.fillna(0).astype(int)
+            df_out['Semana_Mes'] = ((dt_series.dt.day - 1) // 7 + 1).fillna(0).astype(int)
+
+            for col in ['Dirección', 'Empresa', 'Sucursal']:
+                if col in df_out.columns:
+                    df_out[col] = df_out[col].fillna('SIN INFORMACIÓN')
+
+            df_out['Fecha_Solo'] = dt_series.dt.date
+            dow_map = {
+                0: 'Lunes', 1: 'Martes', 2: 'Miércoles', 3: 'Jueves', 4: 'Viernes',
+                5: 'Sábado', 6: 'Domingo'
+            }
+            dia_nombre = dt_series.dt.dayofweek.map(dow_map).fillna('')
+            hora_frac = dt_series.dt.hour + dt_series.dt.minute / 60.0
+
+            is_dom = dia_nombre == 'Domingo'
+            is_sab_tarde = (dia_nombre == 'Sábado') & (hora_frac >= 16.0)
+            is_sem_noche = (~dia_nombre.isin(['Sábado', 'Domingo'])) & (hora_frac >= 20.0)
+
+            is_dom_first = is_dom & ~df_out[is_dom].duplicated(subset=['ECO', 'Fecha_Solo'])
+            df_out['Es_Domingo_Aux'] = is_dom_first.reindex(df_out.index, fill_value=False).astype(int)
+
+            is_sab_tarde_first = is_sab_tarde & ~df_out[is_sab_tarde].duplicated(subset=['ECO', 'Fecha_Solo'])
+            df_out['Es_Sabado_Tarde_Aux'] = is_sab_tarde_first.reindex(df_out.index, fill_value=False).astype(int)
+
+            is_sem_noche_first = is_sem_noche & ~df_out[is_sem_noche].duplicated(subset=['ECO', 'Fecha_Solo'])
+            df_out['Es_Semana_Noche_Aux'] = is_sem_noche_first.reindex(df_out.index, fill_value=False).astype(int)
+
+            df_out.drop(columns=['Fecha_Solo'], inplace=True)
+            return df_out
+
+        mov_sheet_exists = False
+        df_new_mov = pd.DataFrame()
+        has_helpers = False
+        df_existing_mov = pd.DataFrame()
+
+        if excel_exists:
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Data Validation extension is not supported and will be removed",
+                        category=UserWarning,
+                    )
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Conditional Formatting extension is not supported and will be removed",
+                        category=UserWarning,
+                    )
+                    excel_file = pd.ExcelFile(output_path)
+                    mov_sheet_exists = 'Movimientos' in excel_file.sheet_names
+
+                if mov_sheet_exists:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="Data Validation extension is not supported and will be removed",
+                            category=UserWarning,
+                        )
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="Conditional Formatting extension is not supported and will be removed",
+                            category=UserWarning,
+                        )
+                        df_header_mov = pd.read_excel(output_path, sheet_name='Movimientos', nrows=0)
+
+                    has_helpers = 'Semana_Mes' in df_header_mov.columns
+                    if has_helpers:
+                        usecols = [
+                            col for col in [
+                                'ECO',
+                                'Fecha-hora Inicio',
+                                'Fecha-hora Término',
+                                'Usuario',
+                                'Distancia(KM)',
+                                'Semana_Mes',
+                            ]
+                            if col in df_header_mov.columns
+                        ]
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings(
+                                "ignore",
+                                message="Data Validation extension is not supported and will be removed",
+                                category=UserWarning,
+                            )
+                            warnings.filterwarnings(
+                                "ignore",
+                                message="Conditional Formatting extension is not supported and will be removed",
+                                category=UserWarning,
+                            )
+                            df_existing_mov = pd.read_excel(output_path, sheet_name='Movimientos', usecols=usecols)
+                    else:
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings(
+                                "ignore",
+                                message="Data Validation extension is not supported and will be removed",
+                                category=UserWarning,
+                            )
+                            warnings.filterwarnings(
+                                "ignore",
+                                message="Conditional Formatting extension is not supported and will be removed",
+                                category=UserWarning,
+                            )
+                            df_existing_mov = pd.read_excel(output_path, sheet_name='Movimientos')
+
+                    existing_mov_sigs = set(_get_mov_sigs(df_existing_mov))
+                    new_mov_sigs = _get_mov_sigs(df_mov_raw)
+                    df_new_mov = df_mov_raw[~new_mov_sigs.isin(existing_mov_sigs)].copy()
+                    print(f"🔍 Comparación terminada. Movimientos nuevos detectados: {len(df_new_mov)}")
+                    if has_helpers and df_new_mov.empty:
+                        print("✨ No se encontraron movimientos nuevos para añadir.")
+                        return
+                else:
+                    print("🆕 El Excel actual no tiene hoja Movimientos. Se creará.")
+                    df_new_mov = df_mov_raw
+            except Exception as e:
+                print(f"⚠️ Error al leer movimientos existentes ({e}). Se reescribirá la pestaña.")
+                mov_sheet_exists = False
+                df_new_mov = df_mov_raw
+        else:
+            df_new_mov = df_mov_raw
+
+        if excel_exists:
+            print("📄 Abriendo Excel final completo para escritura...")
+            try:
+                is_xlsm = output_path.lower().endswith('.xlsm')
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Data Validation extension is not supported and will be removed",
+                        category=UserWarning,
+                    )
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Conditional Formatting extension is not supported and will be removed",
+                        category=UserWarning,
+                    )
+                    wb = openpyxl.load_workbook(output_path, keep_vba=is_xlsm)
+            except Exception as e:
+                print(f"⚠️ Error al abrir el Excel existente para escritura ({e}). Se creará de nuevo.")
+                excel_exists = False
+
+        if not excel_exists:
+            print("🆕 No existía el Excel final. Se creará un archivo nuevo con la hoja Movimientos.")
+            wb = openpyxl.Workbook()
+            default_sheet = wb.active
+            wb.remove(default_sheet)
+
+        if mov_sheet_exists and not has_helpers:
+            print("🔄 Detectada estructura anterior de Movimientos. Regenerando la pestaña completa con las nuevas columnas helper...")
+            df_all = pd.concat([df_existing_mov, df_new_mov], ignore_index=True)
+            df_all = _compute_helper_columns(df_all)
+
+            ws_mov = wb['Movimientos']
+            ws_mov.delete_rows(1, ws_mov.max_row + 1)
+            headers_mov = df_all.columns.tolist()
+            ws_mov.append(headers_mov)
+            ws_mov.row_dimensions[1].height = 20
+            for col_idx, header in enumerate(headers_mov, 1):
+                cell = ws_mov.cell(row=1, column=col_idx)
+                cell.font = century_bold
+                cell.fill = green_fill
+                cell.alignment = middle_align
+
+            start_row_mov = 2
+            for _, row in df_all.iterrows():
+                row_vals = []
+                for col_name in df_all.columns:
+                    val = row[col_name]
+                    if pd.isna(val):
+                        val = None
+                    row_vals.append(val)
+                ws_mov.append(row_vals)
+            end_row_mov = ws_mov.max_row
+
+            if (end_row_mov - start_row_mov) <= 5000:
+                print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
+                for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                    ws_mov.row_dimensions[row[0].row].height = 20
+                    for cell in row:
+                        cell.font = century_font
+                        cell.alignment = middle_align
+            else:
+                print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
+
+        elif not mov_sheet_exists:
+            ws_mov = wb.create_sheet(title='Movimientos')
+            df_new_mov = _compute_helper_columns(df_new_mov)
+            headers_mov = df_new_mov.columns.tolist()
+            ws_mov.append(headers_mov)
+            ws_mov.row_dimensions[1].height = 20
+            for col_idx, header in enumerate(headers_mov, 1):
+                cell = ws_mov.cell(row=1, column=col_idx)
+                cell.font = century_bold
+                cell.fill = green_fill
+                cell.alignment = middle_align
+
+            start_row_mov = 2
+            if not df_new_mov.empty:
+                for _, row in df_new_mov.iterrows():
+                    row_vals = []
+                    for col_name in df_new_mov.columns:
+                        val = row[col_name]
+                        if pd.isna(val):
+                            val = None
+                        row_vals.append(val)
+                    ws_mov.append(row_vals)
+                end_row_mov = ws_mov.max_row
+
+                if (end_row_mov - start_row_mov) <= 5000:
+                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
+                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                        ws_mov.row_dimensions[row[0].row].height = 20
+                        for cell in row:
+                            cell.font = century_font
+                            cell.alignment = middle_align
+                else:
+                    print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
+
+        else:
+            ws_mov = wb['Movimientos']
+            is_empty_mov = True
+            if ws_mov.max_row > 1:
+                for r in range(2, min(ws_mov.max_row + 1, 100)):
+                    if any(ws_mov.cell(row=r, column=c).value is not None for c in range(1, ws_mov.max_column + 1)):
+                        is_empty_mov = False
+                        break
+                if is_empty_mov:
+                    print("🧹 Detectadas celdas vacías fantasma en Movimientos. Reseteando contador de filas...")
+                    ws_mov.delete_rows(2, ws_mov.max_row)
+
+            if not df_new_mov.empty:
+                print(f"📥 Insertando {len(df_new_mov)} nuevos registros de movimientos...")
+                df_new_mov = _compute_helper_columns(df_new_mov)
+
+                existing_headers_mov = [ws_mov.cell(row=1, column=c).value for c in range(1, ws_mov.max_column + 1)]
+                if not existing_headers_mov or not existing_headers_mov[0]:
+                    existing_headers_mov = df_new_mov.columns.tolist()
+
+                for col in df_new_mov.columns:
+                    if col not in existing_headers_mov:
+                        existing_headers_mov.append(col)
+
+                for col_idx, header in enumerate(existing_headers_mov, 1):
+                    cell = ws_mov.cell(row=1, column=col_idx, value=header)
+                    cell.font = century_bold
+                    cell.fill = green_fill
+                    cell.alignment = middle_align
+
+                start_row_mov = ws_mov.max_row + 1
+
+                for _, row in df_new_mov.iterrows():
+                    row_vals = []
+                    for col_name in existing_headers_mov:
+                        val = row.get(col_name, None)
+                        if pd.isna(val):
+                            val = None
+                        row_vals.append(val)
+                    ws_mov.append(row_vals)
+
+                end_row_mov = ws_mov.max_row
+                if (end_row_mov - start_row_mov) <= 5000:
+                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas nuevas de movimientos...")
+                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
+                        ws_mov.row_dimensions[row[0].row].height = 20
+                        for cell in row:
+                            cell.font = century_font
+                            cell.alignment = middle_align
+                else:
+                    print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
+            else:
+                print("✨ No se encontraron movimientos nuevos para añadir.")
+
+        ws_mov.sheet_view.showGridLines = False
+
+        for col in ws_mov.columns:
+            max_len = max(len(str(col[i].value or '')) for i in range(min(len(col), 200)))
+            col_letter = col[0].column_letter
+            ws_mov.column_dimensions[col_letter].width = max(max_len + 3, 10)
+
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            for table_name, table in list(ws.tables.items()):
+                ref_parts = table.ref.split(':')
+                if len(ref_parts) == 2:
+                    start_cell = ref_parts[0]
+                    end_cell = ref_parts[1]
+                    m = re.match(r'^([A-Z]+)', end_cell)
+                    if m:
+                        end_col = m.group(1)
+                        new_ref = f"{start_cell}:{end_col}{ws.max_row}"
+                        table.ref = new_ref
+                        print(f"📊 Tabla '{table_name}' redimensionada automáticamente a {new_ref} en la hoja '{sheet_name}'.")
+
+        print("💾 Guardando cambios del Excel final...")
+        wb.save(output_path)
+        wb.close()
+        print(f"\n✅ ¡Actualización de movimientos completada exitosamente!")
+        print(f"📊 Reporte Dashboard generado en: {output_path}")
+    except PermissionError:
+        print(f"❌ Error de permisos: El archivo de salida '{output_path}' está siendo usado por otro programa (probablemente está abierto en Excel). Por favor, ciérralo e intenta de nuevo.")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ Error crítico al actualizar movimientos: {e}")
+
 def consolidar_todo():
     print("=== INICIANDO PROCESO DE CONSOLIDACIÓN LOCAL ===")
     
@@ -424,15 +823,7 @@ def consolidar_todo():
         df_merge = df_merge[cols]
     
     # 7. Exportar o anexar a Excel Final
-    output_path = os.getenv('EXCEL_OUTPUT_PATH')
-    if not output_path:
-        output_dir = os.path.join(PROJECT_ROOT, "Reportes_Ejecutable")
-        os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, "Reporte_Dashboard_Final.xlsx")
-    else:
-        output_dir = os.path.dirname(output_path)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+    output_path = _resolve_output_path()
 
     def _get_signatures(df):
         ecos = df['ECO'].fillna('').astype(str).str.strip()
@@ -461,7 +852,18 @@ def consolidar_todo():
             try:
                 # keep_vba=True is only required/valid for .xlsm files; using it on .xlsx corrupts the file structure
                 is_xlsm = output_path.lower().endswith('.xlsm')
-                wb = openpyxl.load_workbook(output_path, keep_vba=is_xlsm)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Data Validation extension is not supported and will be removed",
+                        category=UserWarning,
+                    )
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Conditional Formatting extension is not supported and will be removed",
+                        category=UserWarning,
+                    )
+                    wb = openpyxl.load_workbook(output_path, keep_vba=is_xlsm)
                 if wb is not None and 'Datos' in wb.sheetnames:
                     datos_existe = True
                 else:
@@ -576,19 +978,32 @@ def consolidar_todo():
 
         ws_datos.sheet_view.showGridLines = False
 
-        # Autoajustar anchos de columnas en Datos
+        # Autoajustar anchos de columnas en Datos (Optimizado: solo revisar las primeras 200 filas)
         for col in ws_datos.columns:
-            max_len = max(len(str(cell.value or '')) for cell in col)
+            max_len = max(len(str(col[i].value or '')) for i in range(min(len(col), 200)))
             col_letter = col[0].column_letter
             ws_datos.column_dimensions[col_letter].width = max(max_len + 3, 10)
 
         # 8. Ingesta de Movimientos Fuera de Horario Laboral
         mov_path = os.getenv('EXCEL_MOV_NOLABORALES_PATH')
-        if mov_path and os.path.exists(mov_path):
-            print("🚗 Procesando movimientos fuera de horario laboral...")
+        mov_sources = _resolve_movimientos_sources(mov_path)
+        if mov_sources:
+            print(f"🚗 Procesando movimientos fuera de horario laboral desde {len(mov_sources)} archivo(s)...")
             try:
-                # Leer pestaña Historico
-                df_mov_raw = pd.read_excel(mov_path, sheet_name='Historico')
+                mov_frames = []
+                for source_path in mov_sources:
+                    try:
+                        df_mov_source = pd.read_excel(source_path, sheet_name='Historico')
+                        df_mov_source['Archivo_Origen'] = os.path.basename(source_path)
+                        mov_frames.append(df_mov_source)
+                    except Exception as source_exc:
+                        print(f"  ⚠️ No se pudo leer Historico en {os.path.basename(source_path)}: {source_exc}")
+
+                if not mov_frames:
+                    raise ValueError("No se pudo leer ningun archivo valido de movimientos.")
+
+                # Leer y unificar pestañas Historico
+                df_mov_raw = pd.concat(mov_frames, ignore_index=True).drop_duplicates().copy()
                 # Normalizar ECO
                 df_mov_raw['ECO'] = df_mov_raw['ECO'].apply(_normalize_eco)
                 # Filtrar ECOs válidos
@@ -793,16 +1208,16 @@ def consolidar_todo():
 
                 ws_mov.sheet_view.showGridLines = False
 
-                # Autoajustar anchos de columnas en Movimientos
+                # Autoajustar anchos de columnas en Movimientos (Optimizado: solo revisar las primeras 200 filas)
                 for col in ws_mov.columns:
-                    max_len = max(len(str(cell.value or '')) for cell in col)
+                    max_len = max(len(str(col[i].value or '')) for i in range(min(len(col), 200)))
                     col_letter = col[0].column_letter
                     ws_mov.column_dimensions[col_letter].width = max(max_len + 3, 10)
 
             except Exception as e:
                 print(f"⚠️ Error al procesar movimientos fuera de horario laboral: {e}")
         else:
-            print("⚠️ No se encontró la ruta del reporte de movimientos en .env o el archivo no existe.")
+            print("⚠️ No se encontró una ruta válida para movimientos fuera de horario en .env.")
 
         # Redimensionar tablas de Excel automáticamente al número real de filas
         for sheet_name in wb.sheetnames:

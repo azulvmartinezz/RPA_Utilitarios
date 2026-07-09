@@ -2,6 +2,7 @@ import os
 import time
 import re
 import datetime
+import calendar
 import json
 from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
@@ -82,32 +83,168 @@ def _nombre_empresa_pase(texto):
     return lineas[0]
 
 
-def _mes_objetivo_desde_periodo(texto, meses_objetivo):
-    """Devuelve el primer mes objetivo cubierto por el periodo mostrado en Pase."""
-    t = texto.upper()
-    years = re.findall(r'\b(\d{4})\b', t)
-    if not years:
+def _normalizar_mes_token(token):
+    return (
+        str(token or "")
+        .strip()
+        .upper()
+        .replace("Á", "A")
+        .replace("É", "E")
+        .replace("Í", "I")
+        .replace("Ó", "O")
+        .replace("Ú", "U")
+    )
+
+
+def _fechas_corte_pase(texto):
+    texto_normalizado = str(texto or "").upper()
+    match = re.search(
+        r'\bDEL\s+(.+?)\s+AL\s+(\d{1,2})(?:\s+DE)?\s+([A-ZÁÉÍÓÚ]+)\s+DEL\s+(\d{4})\b',
+        texto_normalizado,
+    )
+    if not match:
         return None
-    end_year = int(years[-1])
 
-    match_end = re.search(r'(\w+)\s+DEL\s+' + str(end_year), t)
-    if not match_end:
+    try:
+        start_raw, end_day, end_month_raw, end_year = match.groups()
+        end_month = _MESES_ES.get(_normalizar_mes_token(end_month_raw))
+        if not end_month:
+            return None
+
+        start_match = re.fullmatch(r'\s*(\d{1,2})(?:\s+DE)?\s+([A-ZÁÉÍÓÚ]+)\s*', start_raw)
+        if start_match:
+            start_day, start_month_raw = start_match.groups()
+            start_month = _MESES_ES.get(_normalizar_mes_token(start_month_raw))
+        else:
+            start_day_match = re.fullmatch(r'\s*(\d{1,2})\s*', start_raw)
+            if not start_day_match:
+                return None
+            start_day = start_day_match.group(1)
+            start_month = end_month
+
+        if not start_month:
+            return None
+
+        end_year = int(end_year)
+        start_year = end_year if start_month <= end_month else end_year - 1
+        start_dt = datetime.date(int(start_year), int(start_month), int(start_day))
+        end_dt = datetime.date(int(end_year), int(end_month), int(end_day))
+        return start_dt, end_dt
+    except Exception:
         return None
-    end_month = _MESES_ES.get(match_end.group(1))
-    if not end_month:
+
+
+def _fecha_mes_pase(texto):
+    texto_normalizado = str(texto or "").upper().strip()
+    match = re.search(r'\b([A-ZÁÉÍÓÚ]+)\s+(\d{4})\b', texto_normalizado)
+    if not match:
         return None
 
-    match_start = re.search(r'DEL\s+\d+\s+(?:DE\s+)?(\w+)', t)
-    start_month = _MESES_ES.get(match_start.group(1)) if match_start else None
-    if not start_month:
-        start_month = end_month
+    month = _MESES_ES.get(_normalizar_mes_token(match.group(1)))
+    year = int(match.group(2))
+    if not month:
+        return None
 
-    start_year = end_year if start_month <= end_month else end_year - 1
+    last_day = calendar.monthrange(year, month)[1]
+    return datetime.date(year, month, 1), datetime.date(year, month, last_day)
 
-    for ty, tm in sorted(meses_objetivo):
-        if (start_year, start_month) <= (ty, tm) <= (end_year, end_month):
-            return ty, tm
+
+def _resolver_fechas_periodo_pase(texto):
+    return _fechas_corte_pase(texto) or _fecha_mes_pase(texto)
+
+
+def _etiqueta_corte_pase(texto):
+    fechas = _resolver_fechas_periodo_pase(texto)
+    if not fechas:
+        return None
+    start_dt, end_dt = fechas
+    return f"corte_{start_dt.strftime('%Y%m%d')}_a_{end_dt.strftime('%Y%m%d')}"
+
+
+def _metadata_periodo_pase(texto, meses_objetivo):
+    return {
+        "bucket": _mes_objetivo_desde_periodo(texto, meses_objetivo or []),
+        "label": _etiqueta_corte_pase(texto),
+    }
+
+
+def _bucket_periodo_pase(texto):
+    fechas = _resolver_fechas_periodo_pase(texto)
+    if not fechas:
+        return None
+    _, end_dt = fechas
+    return end_dt.year, end_dt.month
+
+
+def _es_mes_calendario_completo(texto):
+    fechas = _resolver_fechas_periodo_pase(texto)
+    if not fechas:
+        return False
+
+    start_dt, end_dt = fechas
+    ultimo_dia = calendar.monthrange(end_dt.year, end_dt.month)[1]
+    return (
+        start_dt.year == end_dt.year
+        and start_dt.month == end_dt.month
+        and start_dt.day == 1
+        and end_dt.day == ultimo_dia
+    )
+
+
+def _wait_for_new_csv(descargas_dir, pre_files, timeout=40):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        current_files = set(os.listdir(descargas_dir))
+        new_csvs = sorted(
+            [f for f in (current_files - pre_files) if f.lower().endswith(".csv")]
+        )
+        temp_files = [f for f in current_files if f.endswith(".crdownload") or f.endswith(".tmp")]
+        if new_csvs and not temp_files:
+            newest = max(
+                (os.path.join(descargas_dir, f) for f in new_csvs),
+                key=os.path.getmtime,
+            )
+            return newest
+        time.sleep(1)
     return None
+
+
+def _stamp_download_with_period(downloaded_path, period_metadata):
+    if not downloaded_path or not period_metadata:
+        return downloaded_path
+
+    label = period_metadata.get("label")
+    if not label:
+        return downloaded_path
+
+    base_dir = os.path.dirname(downloaded_path)
+    original_name = os.path.basename(downloaded_path)
+    if label in original_name:
+        return downloaded_path
+
+    name, ext = os.path.splitext(original_name)
+    stamped_name = f"{name}_{label}{ext}"
+    stamped_path = os.path.join(base_dir, stamped_name)
+
+    try:
+        if os.path.exists(stamped_path):
+            os.remove(stamped_path)
+        os.replace(downloaded_path, stamped_path)
+        print(f"  🏷️ Archivo etiquetado con rango: {stamped_name}")
+        return stamped_path
+    except Exception as exc:
+        print(f"  ⚠️ No se pudo etiquetar el archivo descargado ({exc})")
+        return downloaded_path
+
+
+def _mes_objetivo_desde_periodo(texto, meses_objetivo):
+    """Devuelve el mes lógico del corte si coincide con alguno de los meses objetivo."""
+    bucket = _bucket_periodo_pase(texto)
+    if not bucket:
+        return None
+    if not meses_objetivo:
+        return bucket
+    return bucket if bucket in set(meses_objetivo) else None
 
 def _periodo_en_rango(texto, meses_objetivo):
     """True si el periodo de facturación cubre al menos uno de los meses objetivo."""
@@ -132,6 +269,9 @@ def solve_recaptcha(sitekey, url):
 def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
     """Flujo de descarga para cuentas PREPAGO (pestaña CRUCES con filtro por mes)."""
     print("Modalidad PREPAGO: usando flujo de pestaña CRUCES...")
+    period_files = {}
+    descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
+    os.makedirs(descargas_dir, exist_ok=True)
 
     # 1. Navegar a CRUCES si hay tab con ese texto (opcional: PREPAGO puede ya estar ahí)
     try:
@@ -184,6 +324,7 @@ def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
         data_values = ["1"]  # Solo mes anterior
 
     for dv in data_values:
+        period_metadata = None
         # 3. Abrir dropdown de mes y seleccionar
         try:
             # Hacer clic en el body para cerrar cualquier menú previo (ej. exportación)
@@ -266,6 +407,7 @@ def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
                 continue
 
         print(f"  Seleccionando periodo: {opcion.text if opcion else 'N/A'}")
+        period_metadata = _metadata_periodo_pase(opcion.text if opcion else "", meses_objetivo)
         try:
             opcion.click()
         except:
@@ -307,6 +449,7 @@ def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
         try:
             # Esperamos hasta 20 segundos para que la API responda y la tabla renderice el botón de exportar
             wait_largo = WebDriverWait(driver, 20)
+            pre_files = set(os.listdir(descargas_dir))
             def get_export_btn(d):
                 btns = d.find_elements(By.XPATH, "//button[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'export') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'export') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'descargar')]")
                 visibles = [b for b in btns if b.is_displayed()]
@@ -331,6 +474,10 @@ def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
             driver.execute_script("arguments[0].click();", csv_option)
             print(f"  ✅ Exportación CSV iniciada para periodo data-value={dv}")
             time.sleep(8)
+            downloaded_path = _wait_for_new_csv(descargas_dir, pre_files)
+            stamped_path = _stamp_download_with_period(downloaded_path, period_metadata)
+            if stamped_path:
+                period_files[os.path.basename(stamped_path)] = period_metadata
         except Exception as e:
             print("❌ No se encontró la opción CSV. Imprimiendo opciones de menú disponibles:")
             try:
@@ -340,6 +487,8 @@ def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
             except Exception as e2:
                 print(f"Tampoco se pudieron extraer las opciones: {e2}")
             raise e
+
+    return period_files
 
 
 def _scrape_tags(driver, wait):
@@ -440,7 +589,7 @@ def _scrape_tags(driver, wait):
             pass
 
 
-def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False, with_tags=False):
+def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False, with_tags=False, headless=False):
     print("Iniciando RPA para Pase...")
     mapa_clientes = _cargar_mapa_clientes()
     all_scraped_tags = {}
@@ -456,6 +605,9 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
 
     # Configuración Anti-Detección usando undetected_chromedriver
     chrome_options = uc.ChromeOptions()
+    if headless:
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--window-size=1920,1080")
     
     # Forzar descargas a una carpeta controlada para poder leer los archivos
     descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
@@ -620,7 +772,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                             f"({indice_actual + 1}): {empresa_limpia}"
                         )
                 print(f"Cliente seleccionado: {empresa_actual}")
-                print(f"Empresa usada para BQ/GCS: {empresa_limpia}")
+                print(f"Empresa usada para respaldo local: {empresa_limpia}")
                 driver.execute_script("arguments[0].click();", opciones[indice_actual])
                 time.sleep(1)
 
@@ -664,10 +816,14 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
 
                     if not only_tags:
                         if modalidad == "PREPAGO":
-                            _descargar_prepago(driver, wait, backfill_mode, meses_objetivo)
-                        elif modalidad not in ("POSPAGO",):
+                            periodo_por_archivo.update(
+                                _descargar_prepago(driver, wait, backfill_mode, meses_objetivo)
+                            )
+                        elif modalidad not in ("POSPAGO", "DECENAL"):
                             print(f"⚠️ Modalidad '{modalidad}' no soportada, omitiendo descargas.")
                         else:
+                            if modalidad == "DECENAL":
+                                print("Modalidad DECENAL: usando flujo equivalente a POSPAGO.")
                             xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
                             wait_corto = WebDriverWait(driver, 5)
 
@@ -677,7 +833,11 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                 time.sleep(1.5)
                                 opciones_all = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
                                 n_periodos = len(opciones_all)
-                                print(f"Modo backfill: {n_periodos} periodos encontrados. Descargando todos...")
+                                buckets_pendientes = set(meses_objetivo or [])
+                                if buckets_pendientes:
+                                    print(f"Modo backfill: {n_periodos} periodos encontrados. Buscando {sorted(buckets_pendientes)}...")
+                                else:
+                                    print(f"Modo backfill: {n_periodos} periodos encontrados. Descargando todos...")
                                 driver.find_element(By.TAG_NAME, 'body').click()
                                 time.sleep(1)
 
@@ -696,17 +856,29 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                         continue
                                     print(f"  Periodo {i+1}/{n_periodos}: {texto}")
                                     codigo_match = re.match(r"\s*(\d+)-", texto)
-                                    mes_bucket = _mes_objetivo_desde_periodo(texto, meses_objetivo or [])
-                                    if codigo_match and mes_bucket:
-                                        periodo_por_archivo[codigo_match.group(1)] = mes_bucket
+                                    metadata = _metadata_periodo_pase(texto, meses_objetivo)
+                                    if codigo_match:
+                                        periodo_por_archivo[codigo_match.group(1)] = metadata
                                     opciones_iter[i].click()
                                     time.sleep(6)
+                                    pre_files = set(os.listdir(descargas_dir))
                                     btn_csv_i = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
                                     btn_csv_i.click()
                                     time.sleep(10)
+                                    downloaded_path = _wait_for_new_csv(descargas_dir, pre_files)
+                                    stamped_path = _stamp_download_with_period(downloaded_path, metadata)
+                                    if stamped_path:
+                                        periodo_por_archivo[os.path.basename(stamped_path)] = metadata
+                                    bucket = metadata.get("bucket") if metadata else None
+                                    if bucket in buckets_pendientes:
+                                        buckets_pendientes.discard(bucket)
+                                        if not buckets_pendientes:
+                                            print("  ✅ Ya se cubrieron todos los meses objetivo para este cliente.")
+                                            break
 
-                                print("✅ Descarga de todos los periodos completada.")
+                                print("✅ Descarga de periodos completada.")
                             else:
+                                pre_files = set(os.listdir(descargas_dir))
                                 btn_csv_actual = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
                                 print("Descargando archivo CSV del corte actual...")
                                 btn_csv_actual.click()
@@ -715,10 +887,16 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                 periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
                                 texto_periodo = periodo_dropdown.text
                                 print(f"Periodo detectado: {texto_periodo}")
+                                codigo_match = re.match(r"\s*(\d+)-", texto_periodo)
+                                metadata_actual = _metadata_periodo_pase(texto_periodo, meses_objetivo)
+                                if codigo_match:
+                                    periodo_por_archivo[codigo_match.group(1)] = metadata_actual
+                                downloaded_actual = _wait_for_new_csv(descargas_dir, pre_files)
+                                stamped_actual = _stamp_download_with_period(downloaded_actual, metadata_actual)
+                                if stamped_actual:
+                                    periodo_por_archivo[os.path.basename(stamped_actual)] = metadata_actual
 
-                                match_mes_completo = re.search(r"DEL\s+01\b", texto_periodo, re.IGNORECASE)
-
-                                if match_mes_completo:
+                                if _es_mes_calendario_completo(texto_periodo):
                                     print("✅ Es un mes calendario completo. No se necesita descargar el corte anterior.")
                                     time.sleep(5)
                                 else:
@@ -727,14 +905,32 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                     time.sleep(1.5)
                                     opciones_periodo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
                                     if len(opciones_periodo) >= 2:
+                                        texto_periodo_anterior = opciones_periodo[1].text
+                                        codigo_anterior = re.match(r"\s*(\d+)-", texto_periodo_anterior)
+                                        if codigo_anterior:
+                                            metadata_anterior = _metadata_periodo_pase(
+                                                texto_periodo_anterior,
+                                                meses_objetivo,
+                                            )
+                                            periodo_por_archivo[codigo_anterior.group(1)] = metadata_anterior
+                                        else:
+                                            metadata_anterior = _metadata_periodo_pase(
+                                                texto_periodo_anterior,
+                                                meses_objetivo,
+                                            )
                                         print("Seleccionando el corte del mes anterior cerrado...")
                                         opciones_periodo[1].click()
                                         time.sleep(6)
+                                        pre_files = set(os.listdir(descargas_dir))
                                         btn_csv_anterior = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
                                         print("Descargando archivo CSV del corte anterior...")
                                         btn_csv_anterior.click()
                                         print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
                                         time.sleep(15)
+                                        downloaded_prev = _wait_for_new_csv(descargas_dir, pre_files)
+                                        stamped_prev = _stamp_download_with_period(downloaded_prev, metadata_anterior)
+                                        if stamped_prev:
+                                            periodo_por_archivo[os.path.basename(stamped_prev)] = metadata_anterior
                                     else:
                                         print("No hay suficientes periodos en el historial para descargar uno anterior.")
 
@@ -752,7 +948,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                         archivos_csv = [os.path.join(descargas_dir, f) for f in archivos if f.endswith('.csv')]
 
                         if archivos_csv:
-                            print(f"🚀 Se encontraron {len(archivos_csv)} archivo(s) CSV. Mandando a la aduana de BigQuery...")
+                            print(f"🚀 Se encontraron {len(archivos_csv)} archivo(s) CSV. Procesando datos descargados...")
                             for archivo in archivos_csv:
                                 empresa_archivo = empresa_limpia
                                 numero_cliente_archivo = _extraer_numero_cliente_archivo(archivo)
@@ -768,7 +964,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                     if df_limpio is not None:
                                         bq_ingestion.ingest_to_bigquery(df_limpio)
                                 except Exception as e:
-                                    print(f"❌ Error durante la ingesta a BQ de {archivo}: {e}")
+                                    print(f"❌ Error al procesar datos descargados de {archivo}: {e}")
                                 finally:
                                     respaldo_dir = os.path.join(os.getcwd(), "respaldo_descargas")
                                     import sys
@@ -778,10 +974,24 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                     import gcs_uploader
                                     year_override = None
                                     month_override = None
+                                    name_tag = None
                                     archivo_base = os.path.basename(archivo)
+                                    metadata = periodo_por_archivo.get(archivo_base)
                                     codigo_archivo = re.search(r"\.(\d+)\.csv$", archivo_base, re.IGNORECASE)
-                                    if codigo_archivo and codigo_archivo.group(1) in periodo_por_archivo:
-                                        year_override, month_override = periodo_por_archivo[codigo_archivo.group(1)]
+                                    selected_bucket = meses_objetivo[0] if meses_objetivo and len(set(meses_objetivo)) == 1 else None
+                                    if metadata:
+                                        bucket = metadata.get("bucket")
+                                        if bucket:
+                                            year_override, month_override = bucket
+                                        name_tag = metadata.get("label")
+                                    elif codigo_archivo and codigo_archivo.group(1) in periodo_por_archivo:
+                                        metadata = periodo_por_archivo[codigo_archivo.group(1)]
+                                        bucket = metadata.get("bucket")
+                                        if bucket:
+                                            year_override, month_override = bucket
+                                        name_tag = metadata.get("label")
+                                    if not (year_override and month_override) and selected_bucket:
+                                        year_override, month_override = selected_bucket
                                     elif backfill_mode and meses_objetivo and len(set(meses_objetivo)) == 1:
                                         year_override, month_override = meses_objetivo[0]
 
@@ -791,6 +1001,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                         empresa=empresa_archivo,
                                         year=year_override,
                                         month=month_override,
+                                        name_tag=name_tag,
                                     )
                         else:
                             print("⚠️ No se encontraron archivos CSV en la carpeta temporal.")

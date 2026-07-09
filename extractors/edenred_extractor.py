@@ -180,7 +180,7 @@ def main(n_expected=1):
                         manifest[f"attachment::{adjunto.name}"] = {"empresa": empresa}
                         _save_manifest(manifest)
                     
-                    print("🚀 Mandando a la aduana de BigQuery...")
+                    print("🚀 Procesando adjunto para consolidacion local...")
                     try:
                         df_limpio = bq_ingestion.procesar_edenred(ruta_guardado, empresa=empresa)
                         if df_limpio is not None:
@@ -192,7 +192,7 @@ def main(n_expected=1):
                             mensaje.mark_as_read()
                         print("✅ Correo procesado.")
                     except Exception as e:
-                        print(f"❌ Error al procesar a BigQuery: {e}")
+                        print(f"❌ Error al procesar adjunto de Edenred: {e}")
                     finally:
                         # Respaldar el archivo en lugar de borrarlo
                         if os.path.exists(ruta_guardado):

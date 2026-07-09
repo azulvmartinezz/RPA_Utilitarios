@@ -1,6 +1,5 @@
 import os
 import sys
-import time
 import datetime
 import calendar
 import threading
@@ -8,7 +7,6 @@ import json
 import traceback
 import customtkinter as ctk
 from tkinter import messagebox
-import pandas as pd
 from dotenv import load_dotenv
 
 os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
@@ -49,6 +47,18 @@ try:
     os.chdir(base_dir)
 except OSError:
     pass
+
+from shared.auth_service import run_o365_auth
+from shared.date_ranges import (
+    CUSTOM_RANGE_LABEL,
+    DEFAULT_RANGE_LABEL,
+    RANGE_OPTIONS,
+    build_date_selection,
+    build_period_label,
+)
+from shared.consolidation_service import run_full_consolidation
+from shared.ingest_capture import clear_captured_data, install_ingest_capture
+from shared.pipeline_runner import PipelineOptions, run_selected_flows
 
 
 def _write_boot_log(message):
@@ -109,22 +119,7 @@ else:
     load_dotenv()
     _write_boot_log("No se encontró .env explícito; se cargó dotenv por búsqueda estándar.")
 
-# Interceptar BigQuery Ingest para reporte consolidado local
-from bigquery import bq_ingestion
-
-ingested_dfs = []
-original_ingest_to_bigquery = bq_ingestion.ingest_to_bigquery
-
-def custom_ingest_to_bigquery(df, project_id=None):
-    if df is not None and len(df) > 0:
-        ingested_dfs.append(df.copy())
-    return original_ingest_to_bigquery(df, project_id)
-
-bq_ingestion.ingest_to_bigquery = custom_ingest_to_bigquery
-
-# Importar flujos de orquestación
-from scrapers import pase_rpa, supramax_rpa, edenred_rpa, fleetup_rpa
-from extractors import edenred_extractor
+install_ingest_capture(forward_to_original=False)
 
 
 class CustomConsoleRedirector:
@@ -427,6 +422,7 @@ class RPAAppCTk(ctk.CTk):
         # Inicializar fechas internas seleccionadas
         self.selected_start_date = datetime.date.today()
         self.selected_end_date = datetime.date.today()
+        self.date_selection = build_date_selection(DEFAULT_RANGE_LABEL)
 
         _write_boot_log("Llamando crear_interfaz().")
         self.crear_interfaz()
@@ -508,12 +504,10 @@ class RPAAppCTk(ctk.CTk):
         self.date_selection_container.pack(fill="x", padx=15, pady=5)
 
         self.combo_fechas = ctk.CTkComboBox(self.date_selection_container, values=[
-            "Mes pasado (Predeterminado)", 
-            "Este año", 
-            "Año pasado", 
-            "Rango personalizado"
+            *RANGE_OPTIONS
         ], width=230, font=ctk.CTkFont(family="Century Gothic", size=12), command=self.on_date_range_change)
         self.combo_fechas.pack(side="left", padx=(0, 15))
+        self.combo_fechas.set(DEFAULT_RANGE_LABEL)
 
         # Sub-contenedor para fechas personalizadas - Muestra botones que abren nuestro CTkCalendar
         self.custom_dates_frame = ctk.CTkFrame(self.date_selection_container, fg_color="transparent")
@@ -605,7 +599,7 @@ class RPAAppCTk(ctk.CTk):
             )
 
     def on_date_range_change(self, choice):
-        if choice == "Rango personalizado":
+        if choice == CUSTOM_RANGE_LABEL:
             self.custom_dates_frame.pack(side="left")
         else:
             self.custom_dates_frame.pack_forget()
@@ -630,18 +624,9 @@ class RPAAppCTk(ctk.CTk):
 
     def actualizar_info_fechas(self, *args):
         try:
-            modo, fini, ffin, _, _ = self.calcular_fechas()
-            if modo == "mes_pasado":
-                # Calcular mes anterior
-                today = datetime.date.today()
-                first_day_this_month = today.replace(day=1)
-                last_day_prev_month = first_day_this_month - datetime.timedelta(days=1)
-                first_day_prev_month = last_day_prev_month.replace(day=1)
-                fini = first_day_prev_month.strftime("%d/%m/%Y")
-                ffin = last_day_prev_month.strftime("%d/%m/%Y")
-                
+            selection = self._build_current_date_selection()
             self.lbl_fechas_info.configure(
-                text=f"📅 Periodo real a procesar: del {fini} al {ffin}",
+                text=f"📅 {build_period_label(selection)}",
                 text_color=("#219EBC", "#8ECAE6")
             )
         except ValueError as e:
@@ -649,6 +634,13 @@ class RPAAppCTk(ctk.CTk):
                 text=f"⚠️ {str(e)}",
                 text_color=("#FB8500", "#FFB703")
             )
+
+    def _build_current_date_selection(self):
+        return build_date_selection(
+            self.combo_fechas.get(),
+            self.selected_start_date,
+            self.selected_end_date,
+        )
 
     def toggle_controles(self, habilitar):
         estado = "normal" if habilitar else "disabled"
@@ -672,61 +664,14 @@ class RPAAppCTk(ctk.CTk):
             self.btn_config.configure(state="disabled", fg_color=("#F0F2F5", "#011E2D"))
 
     def calcular_fechas(self):
-        rango = self.combo_fechas.get()
-        today = datetime.date.today()
-        
-        if rango == "Mes pasado (Predeterminado)":
-            return "mes_pasado", None, None, None, None
-            
-        elif rango == "Este año":
-            fini = f"01/01/{today.year}"
-            ffin = today.strftime("%d/%m/%Y")
-            
-            meses_objetivo = []
-            meses_edenred = []
-            for m in range(1, today.month + 1):
-                meses_objetivo.append((today.year, m))
-                meses_edenred.append(f"{m:02d}/{today.year}")
-            return "rango", fini, ffin, meses_objetivo, meses_edenred
-            
-        elif rango == "Año pasado":
-            year = today.year - 1
-            fini = f"01/01/{year}"
-            ffin = f"31/12/{year}"
-            
-            meses_objetivo = []
-            meses_edenred = []
-            for m in range(1, 13):
-                meses_objetivo.append((year, m))
-                meses_edenred.append(f"{m:02d}/{year}")
-            return "rango", fini, ffin, meses_objetivo, meses_edenred
-            
-        elif rango == "Rango personalizado":
-            d_start = self.selected_start_date
-            d_end = self.selected_end_date
-                
-            if d_start > d_end:
-                raise ValueError("La fecha inicio no puede ser posterior a la fecha fin.")
-                
-            fini = d_start.strftime("%d/%m/%Y")
-            ffin = d_end.strftime("%d/%m/%Y")
-                
-            meses_objetivo = []
-            meses_edenred = []
-            curr = d_start
-            while curr <= d_end:
-                meses_objetivo.append((curr.year, curr.month))
-                meses_edenred.append(curr.strftime("%m/%Y"))
-                # Incrementar un mes de forma robusta
-                if curr.month == 12:
-                    curr = curr.replace(year=curr.year + 1, month=1)
-                else:
-                    curr = curr.replace(month=curr.month + 1)
-                    
-            meses_objetivo = sorted(list(set(meses_objetivo)))
-            meses_edenred = sorted(list(set(meses_edenred)))
-            
-            return "rango", fini, ffin, meses_objetivo, meses_edenred
+        selection = self._build_current_date_selection()
+        return (
+            selection.mode,
+            selection.start_text,
+            selection.end_text,
+            selection.target_months,
+            selection.edenred_months,
+        )
 
     def start_pipeline_thread(self):
         if not self.var_pase.get() and not self.var_supramax.get() and not self.var_edenred.get() and not self.var_fleetup.get():
@@ -743,108 +688,41 @@ class RPAAppCTk(ctk.CTk):
         self.toggle_controles(False)
         self.lbl_status.configure(text="Procesando...", text_color=("#FB8500", "#FFB703"))
         
-        ingested_dfs.clear()
+        self.date_selection = self._build_current_date_selection()
+        clear_captured_data()
         
         thread = threading.Thread(target=self.run_pipeline, daemon=True)
         thread.start()
 
     def run_pipeline(self):
-        start_time = time.time()
-        print("\n" + "="*60)
-        print("🚀 INICIANDO EJECUCIÓN DEL FLUJO RPA SELECCIONADO 🚀")
-        if self.modo_fecha == "rango":
-            print(f"📅 Rango de proceso: {self.fini} ➔ {self.ffin}")
-            print(f"📂 Meses objetivos identificados: {self.meses_edenred}")
-        else:
-            # Calcular para el log
-            today = datetime.date.today()
-            first_day_this_month = today.replace(day=1)
-            last_day_prev_month = first_day_this_month - datetime.timedelta(days=1)
-            first_day_prev_month = last_day_prev_month.replace(day=1)
-            print(f"📅 Periodo de proceso: del {first_day_prev_month.strftime('%d/%m/%Y')} al {last_day_prev_month.strftime('%d/%m/%Y')} (Mes Pasado)")
-        print("="*60)
-
-        # 1. Ejecución del Portal Pase
-        if self.var_pase.get():
-            print("\n🎫 [PASE] Iniciando descarga e ingesta directa...")
-            try:
-                if self.modo_fecha == "rango":
-                    pase_rpa.main(backfill_mode=True, meses_objetivo=self.meses_objetivo)
-                else:
-                    pase_rpa.main(backfill_mode=False)
-            except Exception as e:
-                print(f"❌ Error en flujo Pase: {e}")
-
-        # 2. Ejecución de Supramax
-        if self.var_supramax.get():
-            print("\n📈 [SUPRAMAX] Ingestando rango de consumos...")
-            try:
-                if self.modo_fecha == "rango":
-                    supramax_rpa.main(fini_override=self.fini, ffin_override=self.ffin)
-                else:
-                    supramax_rpa.main()
-            except Exception as e:
-                print(f"❌ Error en flujo Supramax: {e}")
-
-        # 3. Ejecución de Fleetup
-        if self.var_fleetup.get():
-            print("\n🚛 [FLEETUP] Iniciando flujo (Descarga + Ingesta)...")
-            try:
-                # FleetUp no maneja rango de fechas personalizado por el momento
-                fleetup_rpa.main()
-            except Exception as e:
-                print(f"❌ Error en flujo FleetUp: {e}")
-
-        # 4. Ejecución de Edenred
-        if self.var_edenred.get():
-            print("\n💎 [EDENRED] Iniciando flujo (Solicitud + Extracción)...")
-            try:
-                if self.modo_fecha == "rango":
-                    n_edenred = edenred_rpa.main(meses_override=self.meses_edenred)
-                else:
-                    n_edenred = edenred_rpa.main()
-                edenred_extractor.main(n_expected=n_edenred)
-            except Exception as e:
-                print(f"❌ Error en flujo Edenred: {e}")
-
-        # 4. Generar reporte consolidado local
-        self.generar_reporte_consolidado()
-
-        total_minutos = (time.time() - start_time) / 60
-        print("\n" + "="*60)
-        print(f"✅ PROCESO GLOBAL FINALIZADO EN {total_minutos:.2f} MINUTOS")
-        print("="*60 + "\n")
-
-        self.after(0, self.finalizar_ejecucion)
-
-    def generar_reporte_consolidado(self):
-        if not ingested_dfs:
-            print("\n⚠️ No se procesó información nueva. No se generará reporte consolidado.")
-            return
-
-        print("\n📊 Generando Reporte Consolidado Local...")
         try:
-            df_consolidado = pd.concat(ingested_dfs, ignore_index=True)
-            
-            reportes_dir = os.path.join(base_dir, "Reportes_Ejecutable")
-            os.makedirs(reportes_dir, exist_ok=True)
-            
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = f"Reporte_Consolidado_RPA_{timestamp}.xlsx"
-            file_path = os.path.join(reportes_dir, file_name)
-            
-            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
-                df_consolidado.to_excel(writer, sheet_name='Detalle Consolidado', index=False)
-                worksheet = writer.sheets['Detalle Consolidado']
-                for col in worksheet.columns:
-                    max_len = max(len(str(cell.value or '')) for cell in col)
-                    col_letter = col[0].column_letter
-                    worksheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
-            
-            print(f"✅ ¡Reporte consolidado guardado en:\n   -> {file_path}")
-            self.after(0, lambda: messagebox.showinfo("Reporte Generado", f"Se generó el reporte consolidado exitosamente en:\n\n{file_path}"))
-        except Exception as e:
-            print(f"❌ Error al generar el reporte consolidado: {e}")
+            result = run_selected_flows(
+                PipelineOptions(
+                    date_selection=self.date_selection,
+                    report_root=base_dir,
+                    run_pase=self.var_pase.get(),
+                    run_supramax=self.var_supramax.get(),
+                    run_edenred=self.var_edenred.get(),
+                    run_fleetup=self.var_fleetup.get(),
+                ),
+                logger=print,
+            )
+            if result.report_path:
+                self.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Reporte Generado",
+                        (
+                            "Se generó el reporte consolidado exitosamente en:\n\n"
+                            f"{result.report_path}"
+                        ),
+                    ),
+                )
+        except Exception:
+            _log_exception("Error no controlado durante run_pipeline().", *sys.exc_info())
+            print("❌ Error no controlado durante la ejecución del pipeline.")
+        finally:
+            self.after(0, self.finalizar_ejecucion)
 
     def finalizar_ejecucion(self):
         self.ejecutando = False
@@ -859,19 +737,6 @@ class RPAAppCTk(ctk.CTk):
         thread.start()
 
     def run_auth(self):
-        print("\n🔐 Iniciando flujo de autenticación O365...")
-        
-        client_id = os.getenv('GRAPH_CLIENT_ID')
-        tenant_id = os.getenv('GRAPH_TENANT_ID')
-        
-        if not client_id or not tenant_id:
-            print("❌ Error: Faltan variables en el archivo .env.")
-            self.after(0, lambda: messagebox.showerror("Faltan Credenciales", "No se encontraron GRAPH_CLIENT_ID o GRAPH_TENANT_ID en el archivo .env."))
-            self.after(0, self.finalizar_ejecucion)
-            return
-
-        from O365 import Account, FileSystemTokenBackend
-
         def my_consent_gui(consent_url):
             print("\n" + "="*60)
             print("1. Abre este link en tu navegador de internet:")
@@ -922,22 +787,12 @@ class RPAAppCTk(ctk.CTk):
             self.wait_window(url_win)
             return res["url"]
 
-        try:
-            credentials = (client_id, "")
-            token_backend = FileSystemTokenBackend(token_path=base_dir, token_filename='o365_token.txt')
-            account = Account(credentials, auth_flow='authorization', tenant_id=tenant_id, token_backend=token_backend)
-            
-            if account.authenticate(scopes=['basic', 'message_all'], handle_consent=my_consent_gui):
-                token_path = os.path.join(base_dir, 'o365_token.txt')
-                print(f"\n✅ ¡Autenticación exitosa! Token guardado en: {token_path}")
-                self.after(0, lambda: messagebox.showinfo("Éxito", "¡Token generado y autenticación exitosa!"))
-            else:
-                print("\n❌ La autenticación falló.")
-                self.after(0, lambda: messagebox.showerror("Fallo", "La autenticación falló. Revisa las credenciales e intenta de nuevo."))
-        except Exception as e:
-            print(f"❌ Error en autenticación: {e}")
-            self.after(0, lambda: messagebox.showerror("Error", f"Ocurrió un error: {e}"))
-            
+        result = run_o365_auth(base_dir, my_consent_gui, logger=print)
+        if result.success:
+            self.after(0, lambda: messagebox.showinfo(result.title, result.message))
+        else:
+            self.after(0, lambda: messagebox.showerror(result.title, result.message))
+
         self.after(0, self.finalizar_ejecucion)
 
     def start_consolidation_thread(self):
@@ -948,24 +803,12 @@ class RPAAppCTk(ctk.CTk):
         thread.start()
 
     def run_consolidation(self):
-        print("\n" + "="*60)
-        print("📊 INICIANDO PROCESO DE CONSOLIDACIÓN DESDE INTERFAZ 🚀")
-        print("="*60)
-        
-        try:
-            # 1. Unificar los respaldos crudos locales en OneDrive
-            from scripts_onedrive import unificar_respaldos_local
-            unificar_respaldos_local.unificar_respaldos_desde_onedrive()
-            
-            # 2. Realizar el cruce de datos y generar reporte final
-            from scripts import consolidar_utilitarios
-            consolidar_utilitarios.consolidar_todo()
-            print("\n✅ ¡Consolidación finalizada con éxito!")
-            self.after(0, lambda: messagebox.showinfo("Proceso Terminado", "Reporte Dashboard Final consolidado con éxito en la carpeta de OneDrive configurada."))
-        except Exception as e:
-            print(f"❌ Error durante la consolidación: {e}")
-            self.after(0, lambda: messagebox.showerror("Error", f"Ocurrió un error al consolidar: {e}"))
-            
+        result = run_full_consolidation(logger=print)
+        if result.success:
+            self.after(0, lambda: messagebox.showinfo("Proceso Terminado", result.message))
+        else:
+            self.after(0, lambda: messagebox.showerror("Error", result.message))
+
         self.after(0, self.finalizar_ejecucion)
 
 

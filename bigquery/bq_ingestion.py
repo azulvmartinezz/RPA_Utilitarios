@@ -27,6 +27,26 @@ def _normalize_eco(val):
     return s
 
 
+def _optional_string(series):
+    values = series.astype("string").str.strip()
+    return values.where(values.notna(), other=None)
+
+
+def _bq_schema():
+    return [
+        bigquery.SchemaField("ECO", "STRING"),
+        bigquery.SchemaField("Fecha", "DATE"),
+        bigquery.SchemaField("Concepto", "STRING"),
+        bigquery.SchemaField("Tipo", "STRING"),
+        bigquery.SchemaField("Cantidad", "FLOAT"),
+        bigquery.SchemaField("Importe", "FLOAT"),
+        bigquery.SchemaField("Sistema", "STRING"),
+        bigquery.SchemaField("Empresa", "STRING"),
+        bigquery.SchemaField("Id_Origen", "STRING"),
+        bigquery.SchemaField("Archivo_Origen", "STRING"),
+    ]
+
+
 def _table_id(project_id=None):
     project_id = project_id or os.getenv('GCP_PROJECT_ID')
     dataset = _safe_identifier(os.getenv('BQ_DATASET', 'rpa_utilitarios'), "BQ_DATASET")
@@ -127,13 +147,13 @@ def ingest_to_bigquery(df, project_id=None):
     df['ECO'] = df['ECO'].astype(str)
     df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce').dt.date
     df['Concepto'] = df['Concepto'].astype(str)
-    df['Tipo'] = df['Tipo'].where(df['Tipo'].notna(), other=None)
+    df['Tipo'] = _optional_string(df['Tipo'])
     df['Cantidad'] = pd.to_numeric(df['Cantidad'], errors='coerce')
     df['Importe'] = pd.to_numeric(df['Importe'], errors='coerce')
     df['Sistema'] = df['Sistema'].astype(str)
-    df['Empresa'] = df['Empresa'].where(df['Empresa'].notna(), other=None)
-    df['Id_Origen'] = df['Id_Origen'].where(df['Id_Origen'].notna(), other=None)
-    df['Archivo_Origen'] = df['Archivo_Origen'].where(df['Archivo_Origen'].notna(), other=None)
+    df['Empresa'] = _optional_string(df['Empresa'])
+    df['Id_Origen'] = _optional_string(df['Id_Origen'])
+    df['Archivo_Origen'] = _optional_string(df['Archivo_Origen'])
     
     print(f"  -> Filas antes de limpieza: {len(df)}")
     
@@ -169,7 +189,10 @@ def ingest_to_bigquery(df, project_id=None):
         df = df.drop_duplicates(subset=columnas_esperadas).copy()
     temp_table = f"{table_id}__tmp_{uuid.uuid4().hex[:12]}"
 
-    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+    job_config = bigquery.LoadJobConfig(
+        write_disposition="WRITE_TRUNCATE",
+        schema=_bq_schema(),
+    )
 
     print(f"Subiendo {len(df)} registros limpios a BigQuery ({table_id})...")
     load_job = client.load_table_from_dataframe(df, temp_table, job_config=job_config)
@@ -206,6 +229,7 @@ def ingest_to_bigquery(df, project_id=None):
 
 def procesar_supramax(file_path, empresa=None):
     print(f"Procesando Supramax: {file_path}")
+    archivo_origen = os.path.basename(file_path)
     # Supramax suele devolver tablas HTML con extensión .xls
     try:
         # Leer sin header para detectar la fila que contiene "PLACAS"
@@ -236,6 +260,7 @@ def procesar_supramax(file_path, empresa=None):
     df_clean['Importe'] = df['IMPORTE']
     df_clean['Sistema'] = "Supramax"
     df_clean['Empresa'] = empresa
+    df_clean['Archivo_Origen'] = archivo_origen
     
     return df_clean
 
@@ -301,6 +326,7 @@ def procesar_pase(file_path, empresa=None):
 
 def procesar_edenred(file_path, empresa=None):
     print(f"Procesando Edenred: {file_path}")
+    archivo_origen = os.path.basename(file_path)
     try:
         df = pd.read_excel(file_path, header=5)
     except:
@@ -321,6 +347,7 @@ def procesar_edenred(file_path, empresa=None):
     df_clean['Importe'] = df['Importe Transacción']
     df_clean['Sistema'] = "Edenred"
     df_clean['Empresa'] = empresa
+    df_clean['Archivo_Origen'] = archivo_origen
     
     return df_clean
 
