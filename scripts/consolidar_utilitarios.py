@@ -382,181 +382,154 @@ def actualizar_movimientos_solo():
         else:
             df_new_mov = df_mov_raw
 
-        if excel_exists:
-            print("📄 Abriendo Excel final completo para escritura...")
+        import xlwings as xw
+        import datetime
+        import tempfile
+
+        def _clean_for_xlwings(df):
+            df_clean = df.copy()
+            for col in df_clean.columns:
+                if pd.api.types.is_timedelta64_dtype(df_clean[col]):
+                    df_clean[col] = df_clean[col].astype(str).replace('NaT', None)
+                elif pd.api.types.is_datetime64_any_dtype(df_clean[col]):
+                    df_clean[col] = df_clean[col].replace({pd.NaT: None})
+                else:
+                    # Las columnas de tipo 'object' pueden contener datetime.timedelta de Python o pd.Timedelta
+                    if df_clean[col].dtype == 'object':
+                        df_clean[col] = df_clean[col].apply(
+                            lambda x: str(x) if isinstance(x, (datetime.timedelta, pd.Timedelta)) else x
+                        )
+                    # Rellenar cualquier otro tipo de NaNs o NAs con None para que Excel lo tome como celda vacía
+                    df_clean[col] = df_clean[col].where(pd.notna(df_clean[col]), None)
+            return df_clean
+
+        def _write_df_via_clipboard_trick(ws_target, df, start_cell, include_header=False):
+            # Escribir el DataFrame a un archivo temporal para evitar el colapso de Apple Events con miles de filas
+            temp_path = tempfile.mktemp(suffix='.xlsx')
+            df.to_excel(temp_path, index=False, header=include_header, engine='openpyxl')
+            
+            # Abrir el temporal en la misma instancia de Excel
+            wb_temp = ws_target.book.app.books.open(temp_path)
+            ws_temp = wb_temp.sheets[0]
+            
+            # Copiar y pegar valores usando las dimensiones exactas del DataFrame
+            num_rows = len(df) + (1 if include_header else 0)
+            num_cols = len(df.columns)
+            if num_rows > 0 and num_cols > 0:
+                ws_temp.range((1, 1), (num_rows, num_cols)).copy()
+                ws_target.range(start_cell).paste(paste='values')
+            
+            # Limpiar portapapeles copiando una celda vacía para evitar que Excel se trabe preguntando si queremos conservar el portapapeles
             try:
-                is_xlsm = output_path.lower().endswith('.xlsm')
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Data Validation extension is not supported and will be removed",
-                        category=UserWarning,
-                    )
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="Conditional Formatting extension is not supported and will be removed",
-                        category=UserWarning,
-                    )
-                    wb = openpyxl.load_workbook(output_path, keep_vba=is_xlsm)
+                ws_target.range('ZZ10000').copy()
+            except:
+                pass
+            
+            wb_temp.close()
+            import os
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+
+        if excel_exists:
+            print("📄 Abriendo Excel final completo con xlwings (puede que veas abrirse Excel brevemente)...")
+            try:
+                # Usar xlwings para abrir la app de Excel. En Mac es más estable usar visible=True.
+                app = xw.App(visible=True)
+                app.display_alerts = False
+                wb = app.books.open(output_path)
             except Exception as e:
                 print(f"⚠️ Error al abrir el Excel existente para escritura ({e}). Se creará de nuevo.")
                 excel_exists = False
+                if 'app' in locals():
+                    app.quit()
 
         if not excel_exists:
             print("🆕 No existía el Excel final. Se creará un archivo nuevo con la hoja Movimientos.")
-            wb = openpyxl.Workbook()
-            default_sheet = wb.active
-            wb.remove(default_sheet)
+            app = xw.App(visible=True)
+            app.display_alerts = False
+            wb = app.books.add()
+            wb.save(output_path)
 
         if mov_sheet_exists and not has_helpers:
             print("🔄 Detectada estructura anterior de Movimientos. Regenerando la pestaña completa con las nuevas columnas helper...")
             df_all = pd.concat([df_existing_mov, df_new_mov], ignore_index=True)
             df_all = _compute_helper_columns(df_all)
+            df_all = _clean_for_xlwings(df_all)
 
-            ws_mov = wb['Movimientos']
-            ws_mov.delete_rows(1, ws_mov.max_row + 1)
-            headers_mov = df_all.columns.tolist()
-            ws_mov.append(headers_mov)
-            ws_mov.row_dimensions[1].height = 20
-            for col_idx, header in enumerate(headers_mov, 1):
-                cell = ws_mov.cell(row=1, column=col_idx)
-                cell.font = century_bold
-                cell.fill = green_fill
-                cell.alignment = middle_align
-
-            start_row_mov = 2
-            for _, row in df_all.iterrows():
-                row_vals = []
-                for col_name in df_all.columns:
-                    val = row[col_name]
-                    if pd.isna(val):
-                        val = None
-                    row_vals.append(val)
-                ws_mov.append(row_vals)
-            end_row_mov = ws_mov.max_row
-
-            if (end_row_mov - start_row_mov) <= 5000:
-                print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
-                for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
-                    ws_mov.row_dimensions[row[0].row].height = 20
-                    for cell in row:
-                        cell.font = century_font
-                        cell.alignment = middle_align
+            if 'Movimientos' in [s.name for s in wb.sheets]:
+                ws_mov = wb.sheets['Movimientos']
+                ws_mov.clear_contents()
             else:
-                print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
+                ws_mov = wb.sheets.add('Movimientos')
+            
+            _write_df_via_clipboard_trick(ws_mov, df_all, 'A1', include_header=True)
 
         elif not mov_sheet_exists:
-            ws_mov = wb.create_sheet(title='Movimientos')
+            if 'Movimientos' not in [s.name for s in wb.sheets]:
+                ws_mov = wb.sheets.add('Movimientos')
+            else:
+                ws_mov = wb.sheets['Movimientos']
+                ws_mov.clear_contents()
+
             df_new_mov = _compute_helper_columns(df_new_mov)
-            headers_mov = df_new_mov.columns.tolist()
-            ws_mov.append(headers_mov)
-            ws_mov.row_dimensions[1].height = 20
-            for col_idx, header in enumerate(headers_mov, 1):
-                cell = ws_mov.cell(row=1, column=col_idx)
-                cell.font = century_bold
-                cell.fill = green_fill
-                cell.alignment = middle_align
-
-            start_row_mov = 2
-            if not df_new_mov.empty:
-                for _, row in df_new_mov.iterrows():
-                    row_vals = []
-                    for col_name in df_new_mov.columns:
-                        val = row[col_name]
-                        if pd.isna(val):
-                            val = None
-                        row_vals.append(val)
-                    ws_mov.append(row_vals)
-                end_row_mov = ws_mov.max_row
-
-                if (end_row_mov - start_row_mov) <= 5000:
-                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas de movimientos...")
-                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
-                        ws_mov.row_dimensions[row[0].row].height = 20
-                        for cell in row:
-                            cell.font = century_font
-                            cell.alignment = middle_align
-                else:
-                    print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
+            df_new_mov = _clean_for_xlwings(df_new_mov)
+            _write_df_via_clipboard_trick(ws_mov, df_new_mov, 'A1', include_header=True)
 
         else:
-            ws_mov = wb['Movimientos']
-            is_empty_mov = True
-            if ws_mov.max_row > 1:
-                for r in range(2, min(ws_mov.max_row + 1, 100)):
-                    if any(ws_mov.cell(row=r, column=c).value is not None for c in range(1, ws_mov.max_column + 1)):
-                        is_empty_mov = False
-                        break
-                if is_empty_mov:
-                    print("🧹 Detectadas celdas vacías fantasma en Movimientos. Reseteando contador de filas...")
-                    ws_mov.delete_rows(2, ws_mov.max_row)
-
+            ws_mov = wb.sheets['Movimientos']
+            
             if not df_new_mov.empty:
-                print(f"📥 Insertando {len(df_new_mov)} nuevos registros de movimientos...")
+                print(f"📥 Insertando {len(df_new_mov)} nuevos registros de movimientos (usando optimización de transferencia)...")
                 df_new_mov = _compute_helper_columns(df_new_mov)
 
-                existing_headers_mov = [ws_mov.cell(row=1, column=c).value for c in range(1, ws_mov.max_column + 1)]
-                if not existing_headers_mov or not existing_headers_mov[0]:
-                    existing_headers_mov = df_new_mov.columns.tolist()
+                # Determinar la última fila
+                last_row = ws_mov.range('A' + str(ws_mov.cells.last_cell.row)).end('up').row
+                if last_row == 1 and ws_mov.range('A1').value is None:
+                    last_row = 0
+                
+                # Obtener encabezados existentes leyendo un rango amplio para no frenar en celdas vacías
+                raw_headers = ws_mov.range('A1:ZZ1').value
+                if not raw_headers:
+                    existing_headers = []
+                elif isinstance(raw_headers, str):
+                    existing_headers = [raw_headers]
+                else:
+                    # Encontrar el último encabezado válido
+                    last_valid = -1
+                    for i, val in enumerate(raw_headers):
+                        if val is not None and val != '':
+                            last_valid = i
+                    existing_headers = raw_headers[:last_valid + 1] if last_valid >= 0 else []
 
                 for col in df_new_mov.columns:
-                    if col not in existing_headers_mov:
-                        existing_headers_mov.append(col)
+                    if col not in existing_headers:
+                        existing_headers.append(col)
+                        ws_mov.range((1, len(existing_headers))).value = col
 
-                for col_idx, header in enumerate(existing_headers_mov, 1):
-                    cell = ws_mov.cell(row=1, column=col_idx, value=header)
-                    cell.font = century_bold
-                    cell.fill = green_fill
-                    cell.alignment = middle_align
+                # Alinear las columnas del dataframe para el insert
+                df_append = pd.DataFrame()
+                for col in existing_headers:
+                    if col in df_new_mov.columns:
+                        df_append[col] = df_new_mov[col]
+                    else:
+                        df_append[col] = None
+                        
+                df_append = _clean_for_xlwings(df_append)
 
-                start_row_mov = ws_mov.max_row + 1
-
-                for _, row in df_new_mov.iterrows():
-                    row_vals = []
-                    for col_name in existing_headers_mov:
-                        val = row.get(col_name, None)
-                        if pd.isna(val):
-                            val = None
-                        row_vals.append(val)
-                    ws_mov.append(row_vals)
-
-                end_row_mov = ws_mov.max_row
-                if (end_row_mov - start_row_mov) <= 5000:
-                    print(f"🎨 Aplicando formato a {end_row_mov - start_row_mov + 1} filas nuevas de movimientos...")
-                    for row in ws_mov.iter_rows(min_row=start_row_mov, max_row=end_row_mov, min_col=1, max_col=ws_mov.max_column):
-                        ws_mov.row_dimensions[row[0].row].height = 20
-                        for cell in row:
-                            cell.font = century_font
-                            cell.alignment = middle_align
+                # Insertar los nuevos datos al final
+                if last_row == 0:
+                    _write_df_via_clipboard_trick(ws_mov, df_append, 'A1', include_header=True)
                 else:
-                    print("⚡ Muchos registros. Omitiendo formato de celdas individuales en Movimientos para agilizar el proceso.")
+                    _write_df_via_clipboard_trick(ws_mov, df_append, f'A{last_row + 1}', include_header=False)
             else:
                 print("✨ No se encontraron movimientos nuevos para añadir.")
-
-        ws_mov.sheet_view.showGridLines = False
-
-        for col in ws_mov.columns:
-            max_len = max(len(str(col[i].value or '')) for i in range(min(len(col), 200)))
-            col_letter = col[0].column_letter
-            ws_mov.column_dimensions[col_letter].width = max(max_len + 3, 10)
-
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            for table_name, table in list(ws.tables.items()):
-                ref_parts = table.ref.split(':')
-                if len(ref_parts) == 2:
-                    start_cell = ref_parts[0]
-                    end_cell = ref_parts[1]
-                    m = re.match(r'^([A-Z]+)', end_cell)
-                    if m:
-                        end_col = m.group(1)
-                        new_ref = f"{start_cell}:{end_col}{ws.max_row}"
-                        table.ref = new_ref
-                        print(f"📊 Tabla '{table_name}' redimensionada automáticamente a {new_ref} en la hoja '{sheet_name}'.")
 
         print("💾 Guardando cambios del Excel final...")
         wb.save(output_path)
         wb.close()
+        app.quit()
         print(f"\n✅ ¡Actualización de movimientos completada exitosamente!")
         print(f"📊 Reporte Dashboard generado en: {output_path}")
     except PermissionError:
