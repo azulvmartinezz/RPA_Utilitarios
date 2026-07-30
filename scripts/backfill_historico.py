@@ -106,15 +106,38 @@ def backfill_supramax(cuenta_filter=None, cuentas_excluir=None, meses_filter=Non
         print("⚠️  Modo recuperación: omitiendo borrado previo para no afectar otras cuentas.")
 
     meses = [_fini_ffin(y, m) for y, m in meses_a_usar]
-    from scrapers.supramax_rpa import process_account
-    for acc in credenciales:
-        fallos_cuenta = process_account(
-            acc['Usuario'], acc['Contraseña'],
-            meses_override=meses, meses_meta=meses_a_usar, empresa=acc.get('Empresa') or acc['Usuario']
-        )
-        if fallos_cuenta:
-            for (y, m) in fallos_cuenta:
-                FALLOS.append(("Supramax", acc['Usuario'], f"{y}-{m:02d}"))
+
+    # `process_account` recibe el driver como primer argumento; este script lo
+    # llamaba sin él y tronaba con "missing 1 required positional argument:
+    # 'password'". Se arma el navegador igual que en `supramax_rpa.main()` y se
+    # reutiliza para todas las cuentas, que es lo que hace ese flujo.
+    from scrapers.supramax_rpa import (
+        _build_chrome_options,
+        _create_driver,
+        process_account,
+    )
+
+    descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
+    os.makedirs(descargas_dir, exist_ok=True)
+    driver = _create_driver(_build_chrome_options(False, descargas_dir))
+    driver.set_page_load_timeout(180)
+    driver.set_script_timeout(180)
+
+    try:
+        for acc in credenciales:
+            fallos_cuenta = process_account(
+                driver,
+                acc['Usuario'], acc['Contraseña'],
+                meses_override=meses, meses_meta=meses_a_usar, empresa=acc.get('Empresa') or acc['Usuario']
+            )
+            if fallos_cuenta:
+                for (y, m) in fallos_cuenta:
+                    FALLOS.append(("Supramax", acc['Usuario'], f"{y}-{m:02d}"))
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
     print("\n✅ Backfill Supramax completado.")
 
@@ -138,8 +161,20 @@ def backfill_edenred(meses_filter=None):
         from extractors import edenred_extractor
 
         n_reportes = edenred_main(meses_override=meses_str)
+
+        # Un cero aquí no es «nada que hacer»: es que el portal no entregó
+        # ningún reporte. Antes se seguía al extractor, encontraba 0 correos
+        # esperando 0, y el resumen final imprimía «todo sin errores» con un mes
+        # entero sin ingerir. Así se detuvo la ingesta dos meses sin que nadie
+        # se diera cuenta.
+        if not n_reportes:
+            raise RuntimeError(
+                "El portal de Edenred no entregó ningún reporte, así que no hay "
+                "nada que leer del correo. Revisa el log del scraper."
+            )
+
         edenred_extractor.main(n_expected=n_reportes)
-        print("\n✅ Backfill Edenred completado.")
+        print(f"\n✅ Backfill Edenred completado ({n_reportes} reporte(s)).")
     except Exception as e:
         print(f"❌ Error en Edenred: {e}")
         for year, month in meses_a_usar:
