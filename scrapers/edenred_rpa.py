@@ -176,6 +176,66 @@ def _create_driver(chrome_options):
     )
     raise RuntimeError(hint)
 
+SEGUNDOS_LOGIN = 40
+
+
+def _guardar_diagnostico(driver, etapa):
+    """Deja captura y HTML para poder ver qué mostraba el portal."""
+    destino = os.path.join(os.getcwd(), "HTML_EDENRED")
+    os.makedirs(destino, exist_ok=True)
+    marca = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = os.path.join(destino, f"edenred_{etapa}_{marca}")
+
+    try:
+        driver.save_screenshot(f"{base}.png")
+        with open(f"{base}.html", "w", encoding="utf-8") as archivo:
+            archivo.write(driver.page_source)
+        print(f"📸 Diagnóstico guardado en {os.path.basename(base)}.png/.html")
+    except Exception as error:
+        print(f"⚠️  No se pudo guardar el diagnóstico: {error}")
+
+
+def _verificar_login(driver):
+    """Truena si el portal no dejó entrar.
+
+    Se espera al dashboard y, si no llega, se revisa si seguimos en la pantalla
+    de acceso: eso significa credenciales rechazadas y no un cambio de la
+    interfaz. La distinción importa porque llevan a arreglos distintos.
+    """
+    print("\nVerificando que el acceso se haya concedido...")
+    espera = WebDriverWait(driver, SEGUNDOS_LOGIN)
+
+    try:
+        espera.until(
+            EC.presence_of_element_located((By.XPATH, "//input[@value='Apps premium']"))
+        )
+        print("✅ Acceso concedido.")
+
+        return
+    except Exception:
+        pass
+
+    _guardar_diagnostico(driver, "login_fallido")
+
+    sigue_en_acceso = bool(
+        driver.find_elements(By.ID, "TallyHawk")
+        or driver.find_elements(By.ID, "UserName")
+        or "LogOn" in driver.current_url
+    )
+
+    if sigue_en_acceso:
+        raise RuntimeError(
+            f"El portal de Edenred rechazó el acceso de {EDENRED_USER}. "
+            "Revisa EDENRED_USER y EDENRED_PASSWORD en el .env: la cuenta pudo "
+            "cambiar de contraseña, quedar bloqueada o requerir otro factor."
+        )
+
+    raise RuntimeError(
+        "Se pasó el acceso pero no apareció el dashboard esperado. Puede que "
+        "el portal haya cambiado; revisa la captura en HTML_EDENRED/."
+    )
+
+
 def main(meses_override=None, headless=False):
     print("Iniciando RPA para Edenred...")
     
@@ -253,8 +313,18 @@ def main(meses_override=None, headless=False):
             print("Enviando formulario de inicio de sesión...")
             pwd_input.send_keys(Keys.RETURN)
         except Exception as e:
-            print(f"No se pudo ingresar la contraseña: {e}")
-            
+            # Antes solo se imprimía y el flujo continuaba. Si no se pudo
+            # escribir la contraseña, nada de lo que sigue tiene sentido.
+            raise RuntimeError(f"No se pudo ingresar la contraseña: {e}") from e
+
+        # 7.b Confirmar que el login realmente pasó.
+        #
+        # Sin esta verificación, unas credenciales rechazadas se manifestaban 40
+        # líneas después como «no se pudo encontrar Apps premium», que parece un
+        # problema de selectores desactualizados y manda a buscar al lugar
+        # equivocado. Pasó exactamente eso con junio de 2026.
+        _verificar_login(driver)
+
         # 8. Esperar a que cargue el dashboard y hacer clic en "Apps premium"
         print("\nEsperando a que cargue el dashboard...")
         try:

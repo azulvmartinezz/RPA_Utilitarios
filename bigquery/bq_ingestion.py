@@ -351,6 +351,77 @@ def procesar_edenred(file_path, empresa=None):
     
     return df_clean
 
+
+def procesar_ticketcar(file_path, empresa=None):
+    """
+    Reporte «Detalle de consumo» del portal nuevo de Ticket Car Edenred.
+
+    Va aparte de `procesar_edenred` porque no se parece en nada: aquel venia
+    del portal viejo por correo, con los encabezados en la fila 6 y columnas
+    llamadas 'Vehiculo', 'Mercancia' e 'Importe Transaccion'. Este trae los
+    encabezados en la primera fila y otros nombres.
+    """
+    print(f"Procesando Ticket Car: {file_path}")
+    archivo_origen = os.path.basename(file_path)
+
+    if file_path.lower().endswith('.csv'):
+        df = pd.read_csv(file_path, encoding='latin1')
+    else:
+        df = pd.read_excel(file_path)
+
+    df.columns = [str(c).strip().upper() for c in df.columns]
+
+    """
+    El portal puede exportar una fila de subtotales por empresa antes de los
+    movimientos: trae el nombre de la empresa en la columna de FECHA y las
+    sumas de litros e importe. El scraper apaga esa opcion, pero un archivo
+    bajado a mano si la trae, y contarla como transaccion duplicaria el gasto
+    del periodo. Se descarta todo lo que no tenga una fecha valida.
+    """
+    # Formato explicito: el portal exporta dd/mm/aaaa y dejar que pandas lo
+    # infiera fila por fila es lento y ambiguo con dias menores a 13.
+    fechas = pd.to_datetime(df['FECHA'], format='%d/%m/%Y', errors='coerce')
+    df = df[fechas.notna()].copy()
+    fechas = fechas[fechas.notna()]
+
+    if 'HORA' in df.columns:
+        marca = fechas.dt.strftime('%Y-%m-%d') + ' ' + df['HORA'].astype(str)
+        fechas = pd.to_datetime(marca, errors='coerce').fillna(fechas)
+
+    df_clean = pd.DataFrame()
+    df_clean['ECO'] = df['UNIDAD'].apply(_normalizar_economico)
+    df_clean['Fecha'] = fechas.values
+    df_clean['Concepto'] = "COMBUSTIBLE"
+    df_clean['Tipo'] = df.get('PRODUCTO/SERVICIO')
+    df_clean['Cantidad'] = pd.to_numeric(df['LITROS'], errors='coerce')
+    df_clean['Importe'] = pd.to_numeric(df['M.N.'], errors='coerce')
+    df_clean['Sistema'] = "Edenred"
+    # La columna EMPRESA del reporte trae el centro de costo ('GENERAL'), no
+    # la razon social; esa viene de la seleccion del scraper.
+    df_clean['Empresa'] = empresa
+    df_clean['Archivo_Origen'] = archivo_origen
+
+    return df_clean
+
+
+def _normalizar_economico(valor):
+    """
+    El portal escribe los economicos sin guion ('AU177') y a veces con el
+    ('PRE-163'). En el catalogo de unidades van siempre con guion, asi que se
+    normaliza aqui para que el cruce no falle por un caracter.
+
+    Lo que no cumple el patron —'LASGR', por ejemplo— se deja tal cual: no
+    es un utilitario y forzarlo solo inventaria una unidad que no existe.
+    """
+    texto = str(valor or '').strip().upper()
+    coincidencia = re.match(r'^(AU|CA|PRE)-?(\d+)$', texto)
+
+    if not coincidencia:
+        return texto
+
+    return f"{coincidencia.group(1)}-{coincidencia.group(2)}"
+
+
 if __name__ == "__main__":
     # Puedes probar el script manualmente aquí:
     # df = procesar_supramax("ruta/a/tu/descarga/supramax.xls")

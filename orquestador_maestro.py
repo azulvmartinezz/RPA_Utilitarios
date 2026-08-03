@@ -4,8 +4,8 @@ import sys
 import os
 import datetime
 import atexit
-from scrapers import edenred_rpa, supramax_rpa, pase_rpa, fleetup_rpa
-from extractors import edenred_extractor
+from scrapers import edenred_rpa, supramax_rpa, pase_rpa, ticketcar_rpa
+from extractors import edenred_extractor, fleetup_viajes
 
 class _Tee:
     def __init__(self, *streams):
@@ -28,12 +28,43 @@ atexit.register(lambda: _log_file.close())
 
 
 def flujo_edenred():
-    print("\n💎 [EDENRED] Iniciando flujo (Solicitud + Extracción)...")
+    """
+    Ticket Car: descarga directa desde el portal nuevo e ingesta inmediata.
+
+    Antes eran dos pasos con el correo en medio —el RPA pedia el reporte y el
+    extractor lo recogia del buzon con O365—. El portal nuevo permite
+    descargarlo, asi que se procesa en la misma corrida y se sabe al momento
+    si funciono. `edenred_rpa` y `edenred_extractor` se conservan por si hay
+    que volver al portal viejo, pero ya no se llaman.
+    """
+    print("\n💎 [TICKET CAR] Iniciando descarga directa e ingesta...")
     try:
-        # Primero solicita los reportes
-        n_edenred = edenred_rpa.main()
-        # Luego procesa los correos que lleguen
-        edenred_extractor.main(n_expected=n_edenred)
+        import gcs_uploader
+        from bigquery import bq_ingestion
+
+        descargados = ticketcar_rpa.main()
+
+        if not descargados:
+            print("⚠️ No se descargo ningun reporte de Ticket Car.")
+            return
+
+        total = 0
+        for ruta, empresa in descargados:
+            try:
+                df = bq_ingestion.procesar_ticketcar(ruta, empresa=empresa)
+
+                if df is not None and not df.empty:
+                    bq_ingestion.ingest_to_bigquery(df)
+                    total += df["Importe"].sum()
+                    print(f"   ✅ {empresa}: {len(df)} movimientos")
+                else:
+                    print(f"   • {empresa}: sin movimientos en el periodo")
+            except Exception as error:
+                print(f"   ❌ {empresa}: {error}")
+            finally:
+                gcs_uploader.subir_y_borrar_local(ruta, "Edenred", empresa=empresa)
+
+        print(f"💰 RESUMEN TICKET CAR: {total:,.2f} procesados.")
     except Exception as e:
         print(f"❌ Error crítico en flujo Edenred: {e}")
 
@@ -52,9 +83,20 @@ def flujo_pase():
         print(f"❌ Error crítico en flujo Pase: {e}")
 
 def flujo_fleetup():
-    print("\n🚛 [FLEETUP] Iniciando flujo (Descarga + Ingesta)...")
+    """Viajes de FleetUp por API.
+
+    Sustituye a `scrapers/fleetup_rpa.py`, que abría el portal con Selenium
+    para bajar un Excel mensual y solo lo respaldaba en GCS —su tabla destino,
+    `rpa_utilitarios.tbl_reportes_viajes`, quedó en cero filas—. Tenemos
+    credenciales del API, así que ya no hace falta el navegador ni resolver
+    captchas. El scraper sigue en el repo por si se necesita comparar contra
+    el reporte del portal, pero no forma parte del flujo.
+    """
+    print("\n🚛 [FLEETUP] Ingestando viajes por API...")
     try:
-        fleetup_rpa.main()
+        # Se traen 30 días, el máximo que acepta el API en una llamada, para
+        # que una corrida perdida se recupere sola en la siguiente.
+        fleetup_viajes.main_dias(30)
     except Exception as e:
         print(f"❌ Error crítico en flujo FleetUp: {e}")
 

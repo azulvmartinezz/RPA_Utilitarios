@@ -11,6 +11,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from twocaptcha import TwoCaptcha
 import undetected_chromedriver as uc
 
+from shared.navegador import resolver_binario, version_mayor
+
 # Cargar variables de entorno
 load_dotenv()
 
@@ -625,9 +627,24 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
     # Crear una carpeta local para guardar las cookies y el historial (Perfil Persistente)
     profile_path = os.path.join(os.getcwd(), "chrome_profile")
     
-    # Ejecutando con undetected-chromedriver para saltar Radware WAF
-    # Fijamos la versión 149 para que coincida con tu navegador instalado
-    driver = uc.Chrome(options=chrome_options, user_data_dir=profile_path, version_main=149)
+    # Ejecutando con undetected-chromedriver para saltar Radware WAF.
+    #
+    # La versión ya no se fija en el código: estaba clavada en 149 y cualquier
+    # actualización de Chrome rompía el scraper. Se consulta al binario. El
+    # binario también se resuelve, porque undetected_chromedriver no trae el
+    # descubrimiento de Selenium Manager y en una máquina sin Chrome instalado
+    # falla con «Binary Location Must be a String».
+    binario = resolver_binario()
+    if binario:
+        chrome_options.binary_location = binario
+        print(f"Usando binario de Chrome: {binario}")
+
+    driver = uc.Chrome(
+        options=chrome_options,
+        user_data_dir=profile_path,
+        browser_executable_path=binario,
+        version_main=version_mayor(binario),
+    )
     
     wait = WebDriverWait(driver, 30)
     
