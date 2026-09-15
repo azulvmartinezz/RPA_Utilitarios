@@ -62,6 +62,22 @@ CASETAS = [
     ("CADEREYTA-REA", 25.60103618312252, -100.00592427299064, "Puente Cadereyta (NL)"),
     ("MAGDALENA", 30.62943413206377, -110.94864871634985, "Hermosillo - Nogales"),
     ("PUERTO INTERIOR", 20.98382313424874, -101.5422150068167, "Salamanca - León"),
+    # Segunda tanda (2026-09-15): Coahuila, Jalisco, Querétaro, Edomex.
+    ("PLAN DE AYALA", 25.444234021531255, -101.30388597205057, "Saltillo - Torreón (Coahuila)"),
+    ("LA CUCHILLA", 25.62706035094198, -102.87836953019901, "Saltillo - Torreón (San Pedro, Coah.)"),
+    ("TORREON", 25.448419132010386, -101.06705392804402, "Plaza de Cobro Torreón"),
+    ("OJO CALIENTE I", 25.61236380380398, -100.91354403885421, "Libramiento Saltillo (Coahuila)"),
+    ("TEPATITLAN", 20.824672674798112, -102.79501525668337, "Zapotlanejo - Lagos de Moreno (Jalisco)"),
+    ("SANTA CECILIA", 20.442528873978805, -103.54579345602107, "(Jalisco)"),
+    ("PALMILLAS BIS", 20.29047884334927, -99.92061130589548, "Palmillas - Apaseo el Grande (Qro)"),
+    ("ATLACOMULCO-LIB QRO", 20.290140198794735, -99.94967798496384, "Palmillas - Apaseo el Grande (Qro)"),
+    ("QUERETARO", 20.572203669708536, -100.47286986896246, "Querétaro - Irapuato"),
+    ("ZAPOTLANEJO", 20.5860286520384, -103.1007622099411, "Macrolibramiento de Guadalajara"),
+    # Aproximado: es la misma autopista (Circuito Exterior Mexiquense), no la
+    # plaza exacta -- el catálogo del sitio no distingue cuál de sus varias
+    # casetas es "CTO EXT MEXIQUENSE" en el CSV de Pase.
+    ("CTO EXT MEXIQUENSE", 19.820061446401677, -99.23989321024048, "Circuito Exterior Mexiquense (aprox., Jorobas)"),
+    ("CTO. EXT. MEXIQUENSE", 19.820061446401677, -99.23989321024048, "Circuito Exterior Mexiquense (aprox., Jorobas)"),
 ]
 
 
