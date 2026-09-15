@@ -3,6 +3,7 @@ import shutil
 import hashlib
 import pandas as pd
 from datetime import datetime
+from google.cloud import storage
 from dotenv import load_dotenv
 import re
 
@@ -122,21 +123,56 @@ def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=
 
     backup_root, backup_label = _resolve_local_backup_root(onedrive_dir)
 
+    if empresa:
+        empresa_limpia = _sanitize_path_component(empresa)
+        nombre_final = f"{empresa_limpia}_{nombre_limpio}"
+    else:
+        empresa_limpia = None
+        nombre_final = nombre_limpio
+
+    # 1. Respaldo local (OneDrive si está configurado, si no una carpeta del
+    # proyecto). Es una conveniencia para revisar sin entrar a GCS -- la
+    # fuente de verdad que lee `extractors/pase_cruces.py` es la nube.
     try:
         dest_dir = os.path.join(backup_root, sistema, str(anio), f"{int(mes):02d}")
         os.makedirs(dest_dir, exist_ok=True)
-
-        if empresa:
-            empresa_limpia = _sanitize_path_component(empresa)
-            nombre_final = f"{empresa_limpia}_{nombre_limpio}"
-        else:
-            nombre_final = nombre_limpio
-
         dest_path = os.path.join(dest_dir, nombre_final)
         shutil.copy(archivo_local, dest_path)
         print(f"[{backup_label}] Archivo guardado localmente: {dest_path}")
-        os.remove(archivo_local)
-        print(f"🗑️ Archivo temporal '{nombre_original}' borrado.")
-        return
     except Exception as e:
         print(f"❌ Error al guardar respaldo local: {e}")
+
+    # 2. Subida a GCS -- esta es la que de verdad importa. Sin ella,
+    # `extractors/pase_cruces.py` nunca ve el archivo nuevo, sin importar
+    # cuántas veces se corra: solo lee de `gs://<bucket>/Pase/`.
+    #
+    # Se quitó por accidente el 2026-07-09 (migración a Flet UI): la función
+    # se quedó con el nombre `subir_y_borrar_local` pero dejó de subir a
+    # ningún lado. Desde entonces cada CSV nuevo se queda en la Mac de quien
+    # corre el scraper. Ver PENDIENTES.md.
+    project_id = os.getenv('GCP_PROJECT_ID')
+    bucket_name = os.getenv('GCP_BUCKET_RESPALDOS', f"{project_id}-respaldos-rpa" if project_id else None)
+
+    if not project_id or not bucket_name:
+        print("⚠️ No se puede subir a GCS: falta GCP_PROJECT_ID en el .env")
+        return
+
+    try:
+        client = storage.Client(project=project_id)
+        bucket = client.bucket(bucket_name)
+
+        ruta_gcs = (
+            f"{sistema}/{empresa_limpia}/{anio}/{mes}/{nombre_limpio}"
+            if empresa_limpia
+            else f"{sistema}/{anio}/{mes}/{nombre_limpio}"
+        )
+
+        print(f"☁️ Subiendo a la nube: gs://{bucket_name}/{ruta_gcs}")
+        blob = bucket.blob(ruta_gcs)
+        blob.upload_from_filename(archivo_local)
+        print("✅ Subida a GCS exitosa.")
+
+        os.remove(archivo_local)
+        print(f"🗑️ Archivo temporal '{nombre_original}' borrado de la Mac.")
+    except Exception as e:
+        print(f"❌ Error al subir a GCS: {e}")
