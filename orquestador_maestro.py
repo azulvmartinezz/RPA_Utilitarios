@@ -5,7 +5,7 @@ import os
 import datetime
 import atexit
 from scrapers import supramax_rpa, pase_rpa
-from extractors import fleetup_viajes, ticketcar_api
+from extractors import fleetup_viajes, pase_cruces, ticketcar_api
 
 class _Tee:
     def __init__(self, *streams):
@@ -66,6 +66,17 @@ def flujo_pase():
         pase_rpa.main()
     except Exception as e:
         print(f"❌ Error crítico en flujo Pase: {e}")
+
+    # Refresca `flota.pase_cruces` con el detalle de caseta, carril y hora
+    # que `procesar_pase()` descarta al consolidar. Relee TODO lo que haya en
+    # GCS (WRITE_TRUNCATE, idempotente) -- no solo el CSV que se acaba de
+    # subir -- así que corre aparte y no truena el flujo de Pase si falla.
+    # Ver PENDIENTES.md, «Cruces de caseta con detalle».
+    print("\n🎫 [PASE] Refrescando detalle de casetas (flota.pase_cruces)...")
+    try:
+        pase_cruces.main()
+    except Exception as e:
+        print(f"❌ Error crítico al refrescar el detalle de casetas: {e}")
 
 def flujo_fleetup():
     """Viajes de FleetUp por API.
