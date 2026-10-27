@@ -4,8 +4,8 @@ import sys
 import os
 import datetime
 import atexit
-from scrapers import supramax_rpa, pase_rpa
-from extractors import fleetup_viajes, pase_cruces, ticketcar_api
+from scrapers import pase_rpa
+from extractors import fleetup_viajes, pase_cruces, supramax_consumos_http, ticketcar_api
 
 class _Tee:
     def __init__(self, *streams):
@@ -54,9 +54,19 @@ def flujo_edenred():
 
 
 def flujo_supramax():
-    print("\n📈 [SUPRAMAX] Iniciando descarga e ingesta directa...")
+    """
+    Supramax: consumo por HTTP, sin navegador.
+
+    Antes era `scrapers/supramax_rpa.py`, que abría Chrome por cuenta y por
+    omisión solo bajaba el MES ANTERIOR completo: el mes en curso no entraba
+    hasta el siguiente. El extractor lee el mismo reporte del portal por
+    debajo —ver su encabezado— y pide los últimos 10 días: una corrida perdida
+    se recupera en la siguiente y fusionar no duplica.
+    """
+    print("\n📈 [SUPRAMAX] Consumo por HTTP...")
     try:
-        supramax_rpa.main()
+        total = supramax_consumos_http.main_dias(10)
+        print(f"⛽ RESUMEN SUPRAMAX: {total} cargas leídas.")
     except Exception as e:
         print(f"❌ Error crítico en flujo Supramax: {e}")
 
