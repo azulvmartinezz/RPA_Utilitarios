@@ -19,6 +19,7 @@ raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if raiz_proyecto not in sys.path:
     sys.path.insert(0, raiz_proyecto)
 import gcs_uploader
+from shared.diagnostico import guardar_diagnostico as _guardar_diagnostico
 
 # Cargar variables de entorno
 load_dotenv()
@@ -32,19 +33,6 @@ def _click_js(driver, wait, locator, descripcion, timeout=20):
     driver.execute_script("arguments[0].click();", element)
     print(f"  -> Click: {descripcion}")
     return element
-
-
-def _guardar_diagnostico(driver, descargas_dir, username, etapa):
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    usuario_seguro = "".join(c for c in str(username) if c.isalnum() or c in ("-", "_"))[:30] or "cuenta"
-    base = os.path.join(descargas_dir, f"supramax_{etapa}_{usuario_seguro}_{timestamp}")
-    try:
-        driver.save_screenshot(f"{base}.png")
-        with open(f"{base}.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
-        print(f"📸 Diagnóstico guardado: {os.path.basename(base)}")
-    except Exception as e:
-        print(f"⚠️ No se pudo guardar diagnóstico ({e})")
 
 
 def _renderer_timeout(err):
