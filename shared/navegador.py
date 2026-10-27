@@ -13,16 +13,71 @@ donde no hay Chrome instalado.
 import os
 import re
 import subprocess
+import sys
 
 CACHE_SELENIUM = os.path.expanduser("~/.cache/selenium/chrome")
 
 RUTAS_CONOCIDAS = [
+    os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
 ]
+
+
+def _version_registro_windows():
+    """Versión de Chrome publicada en el registro de Windows."""
+    if sys.platform != "win32":
+        return None
+
+    try:
+        import winreg
+
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for key_path in (
+                r"SOFTWARE\Google\Chrome\BLBeacon",
+                r"SOFTWARE\WOW6432Node\Google\Chrome\BLBeacon",
+            ):
+                try:
+                    with winreg.OpenKey(hive, key_path) as key:
+                        version, _ = winreg.QueryValueEx(key, "version")
+                    encontrado = re.match(r"(\d+)\.", str(version))
+                    if encontrado:
+                        return int(encontrado.group(1))
+                except OSError:
+                    continue
+    except (ImportError, OSError):
+        pass
+
+    return None
+
+
+def _version_archivo_windows(binario):
+    """Versión mayor tomada de los metadatos de chrome.exe."""
+    if sys.platform != "win32" or not binario:
+        return None
+
+    try:
+        ruta_ps = str(binario).replace("'", "''")
+        salida = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                f"(Get-Item -LiteralPath '{ruta_ps}').VersionInfo.ProductVersion",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        encontrado = re.search(r"(\d+)\.", salida)
+        return int(encontrado.group(1)) if encontrado else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _desde_cache_selenium():
@@ -79,6 +134,10 @@ def version_mayor(binario=None):
 
     if not binario:
         return None
+
+    version_windows = _version_registro_windows() or _version_archivo_windows(binario)
+    if version_windows:
+        return version_windows
 
     try:
         salida = subprocess.run(
