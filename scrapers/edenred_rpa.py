@@ -1,3 +1,16 @@
+"""
+RETIRADO — 20/08/2026. No lo llama nadie.
+
+Recorria el portal VIEJO de Edenred, que ya no permite descargar reportes. Su
+sucesor `ticketcar_rpa.py` tambien quedo retirado; el consumo entra ahora por
+`extractors/ticketcar_api.py`.
+
+Queda un hueco sin fuente: del 1 al 20 de junio de 2026. No esta en la API
+—que arranca el 21— ni en `consumos_flota`, que termina el 31 de mayo. Se le
+pidio al proveedor.
+
+"""
+
 import os
 import time
 import datetime

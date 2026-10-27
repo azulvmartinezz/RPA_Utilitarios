@@ -4,8 +4,8 @@ import sys
 import os
 import datetime
 import atexit
-from scrapers import edenred_rpa, supramax_rpa, pase_rpa, ticketcar_rpa
-from extractors import edenred_extractor, fleetup_viajes
+from scrapers import pase_rpa
+from extractors import fleetup_viajes, pase_cruces, supramax_consumos_http, ticketcar_api
 
 class _Tee:
     def __init__(self, *streams):
@@ -29,49 +29,44 @@ atexit.register(lambda: _log_file.close())
 
 def flujo_edenred():
     """
-    Ticket Car: descarga directa desde el portal nuevo e ingesta inmediata.
+    Ticket Car: consumo por API, directo a BigQuery.
 
-    Antes eran dos pasos con el correo en medio —el RPA pedia el reporte y el
-    extractor lo recogia del buzon con O365—. El portal nuevo permite
-    descargarlo, asi que se procesa en la misma corrida y se sabe al momento
-    si funciono. `edenred_rpa` y `edenred_extractor` se conservan por si hay
-    que volver al portal viejo, pero ya no se llaman.
+    Tercera versión de este flujo. La primera pedía el reporte por correo y lo
+    recogía del buzón con O365; la segunda lo descargaba del portal con
+    Selenium. Las dos dependían de que el proveedor no moviera el HTML y las
+    dos entregaban un Excel de 22 columnas que se aplanaba a diez.
+
+    La API entrega la transacción completa —estación, autorización, impuestos
+    desglosados, odómetro, centro de costos— y aterriza en
+    `flota.ticketcar_transacciones`.
+
+    Los dos scrapers quedaron retirados —ver el encabezado de cada uno—. El
+    portal viejo ya no permite descargar reportes, así que el hueco del 1 al 20
+    de junio de 2026 se le pidió al proveedor; llegará como archivo y se carga
+    con `bigquery.bq_ingestion.procesar_ticketcar`, que sigue en pie.
     """
-    print("\n💎 [TICKET CAR] Iniciando descarga directa e ingesta...")
+    print("\n💎 [TICKET CAR] Consumo por API...")
     try:
-        import gcs_uploader
-        from bigquery import bq_ingestion
-
-        descargados = ticketcar_rpa.main()
-
-        if not descargados:
-            print("⚠️ No se descargo ningun reporte de Ticket Car.")
-            return
-
-        total = 0
-        for ruta, empresa in descargados:
-            try:
-                df = bq_ingestion.procesar_ticketcar(ruta, empresa=empresa)
-
-                if df is not None and not df.empty:
-                    bq_ingestion.ingest_to_bigquery(df)
-                    total += df["Importe"].sum()
-                    print(f"   ✅ {empresa}: {len(df)} movimientos")
-                else:
-                    print(f"   • {empresa}: sin movimientos en el periodo")
-            except Exception as error:
-                print(f"   ❌ {empresa}: {error}")
-            finally:
-                gcs_uploader.subir_y_borrar_local(ruta, "Edenred", empresa=empresa)
-
-        print(f"💰 RESUMEN TICKET CAR: {total:,.2f} procesados.")
+        total = ticketcar_api.main_dias(7)
+        print(f"💰 RESUMEN TICKET CAR: {total} transacciones ingeridas.")
     except Exception as e:
-        print(f"❌ Error crítico en flujo Edenred: {e}")
+        print(f"❌ Error crítico en flujo Ticket Car: {e}")
+
 
 def flujo_supramax():
-    print("\n📈 [SUPRAMAX] Iniciando descarga e ingesta directa...")
+    """
+    Supramax: consumo por HTTP, sin navegador.
+
+    Antes era `scrapers/supramax_rpa.py`, que abría Chrome por cuenta y por
+    omisión solo bajaba el MES ANTERIOR completo: el mes en curso no entraba
+    hasta el siguiente. El extractor lee el mismo reporte del portal por
+    debajo —ver su encabezado— y pide los últimos 10 días: una corrida perdida
+    se recupera en la siguiente y fusionar no duplica.
+    """
+    print("\n📈 [SUPRAMAX] Consumo por HTTP...")
     try:
-        supramax_rpa.main()
+        total = supramax_consumos_http.main_dias(10)
+        print(f"⛽ RESUMEN SUPRAMAX: {total} cargas leídas.")
     except Exception as e:
         print(f"❌ Error crítico en flujo Supramax: {e}")
 
@@ -81,6 +76,17 @@ def flujo_pase():
         pase_rpa.main()
     except Exception as e:
         print(f"❌ Error crítico en flujo Pase: {e}")
+
+    # Refresca `flota.pase_cruces` con el detalle de caseta, carril y hora
+    # que `procesar_pase()` descarta al consolidar. Relee TODO lo que haya en
+    # GCS (WRITE_TRUNCATE, idempotente) -- no solo el CSV que se acaba de
+    # subir -- así que corre aparte y no truena el flujo de Pase si falla.
+    # Ver PENDIENTES.md, «Cruces de caseta con detalle».
+    print("\n🎫 [PASE] Refrescando detalle de casetas (flota.pase_cruces)...")
+    try:
+        pase_cruces.main()
+    except Exception as e:
+        print(f"❌ Error crítico al refrescar el detalle de casetas: {e}")
 
 def flujo_fleetup():
     """Viajes de FleetUp por API.

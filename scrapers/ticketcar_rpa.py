@@ -1,4 +1,19 @@
 """
+RETIRADO — 20/08/2026. No lo llama nadie.
+
+Lo sustituye `extractors/ticketcar_api.py`, que pide el consumo a la API SOAP
+de Ticket Car y lo carga a `flota.ticketcar_transacciones`. La API entrega la
+transaccion completa —estacion, autorizacion, impuestos desglosados, odometro—
+donde este scraper bajaba un Excel de 22 columnas que se aplanaba a diez.
+
+Se valido cuadrando contra el reporte del propio portal: seis de las ocho
+empresas coinciden al centavo en el periodo del 21 al 30 de junio de 2026.
+
+No se borra porque `shared/pipeline_runner.py` y `scripts/backfill_historico.py`
+todavia lo importan para otros portales, y desenredarlo toca flujos que no
+tienen nada que ver con Ticket Car. Si alguien va a limpiar de verdad, empezar
+por ahi.
+
 Descarga el reporte de consumo de Ticket Car Edenred.
 
 Reemplaza a `edenred_rpa.py`, que recorria el portal viejo de Ticket Car ®
