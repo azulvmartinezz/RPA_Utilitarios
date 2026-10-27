@@ -154,15 +154,53 @@ def refrescar_dispositivos(cfg: dict, cliente_bq: bigquery.Client) -> int:
     return len(tabla)
 
 
+def _primer_domingo(anio: int, mes: int) -> dt.date:
+    dia = dt.date(anio, mes, 1)
+
+    return dia + dt.timedelta(days=(6 - dia.weekday()) % 7)
+
+
+def _ultimo_domingo(anio: int, mes: int) -> dt.date:
+    siguiente_mes = dt.date(anio + 1, 1, 1) if mes == 12 else dt.date(anio, mes + 1, 1)
+    ultimo_dia = siguiente_mes - dt.timedelta(days=1)
+
+    return ultimo_dia - dt.timedelta(days=(ultimo_dia.weekday() - 6) % 7)
+
+
+def _en_ventana_dst_legada_mx(fecha: dt.date) -> bool:
+    """Primer domingo de abril a último domingo de octubre, la regla de
+    horario de verano que México (salvo franja fronteriza) dejó de usar en
+    2022 -- ver `_fecha()`."""
+    return _primer_domingo(fecha.year, 4) <= fecha < _ultimo_domingo(fecha.year, 10)
+
+
 def _fecha(compacta) -> dt.datetime | None:
+    """El `startTime`/`endTime` crudo de FleetUp, corregido 1h en la ventana
+    de horario de verano legado (ver abajo).
+
+    FleetUp documenta este campo como UTC, pero comparando su propio reporte
+    web contra lo que mostraba Control Vehicular (agosto 2026: 1532 de 1539
+    movimientos, PENDIENTES.md) se confirmó que en primavera-verano su "UTC"
+    viene 1h ADELANTADO del real -- consistente con que, del lado de ellos,
+    sigan aplicando horario de verano mexicano para Sinaloa, abolido desde
+    2022. El síntoma en Control Vehicular era el contrario: como aquí SÍ se
+    convierte con `America/Mazatlan` (UTC-7 fijo, sin DST), un "UTC" que ya
+    viene adelantado 1h se traducía en una hora local 1h ATRASADA.
+    Se compensa aquí, en el único punto donde se interpreta el timestamp
+    crudo, mientras soporte de FleetUp lo corrige en origen -- el día que lo
+    corrijan, esta compensación hay que retirarla o el error se invierte.
+    """
     texto = str(compacta or "")
 
     if len(texto) != 14 or not texto.isdigit():
         return None
 
-    return dt.datetime.strptime(texto, "%Y%m%d%H%M%S").replace(
-        tzinfo=dt.timezone.utc
-    )
+    cruda = dt.datetime.strptime(texto, "%Y%m%d%H%M%S")
+
+    if _en_ventana_dst_legada_mx(cruda.date()):
+        cruda += dt.timedelta(hours=1)
+
+    return cruda.replace(tzinfo=dt.timezone.utc)
 
 
 def _coordenadas(valor):
