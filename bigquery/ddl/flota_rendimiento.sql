@@ -129,8 +129,10 @@ limites AS (
  * no hay litros en ninguna fuente. Los kilómetros sí están completos, y esa
  * mezcla produce rendimientos de hasta 30 km/l que ninguna camioneta da.
  *
- * Se le pidió el periodo al proveedor. Cuando llegue y se cargue, este renglón
- * se borra y junio vuelve solo.
+ * Se le pidió el periodo al proveedor -- confirmado 2026-09-18 que no se
+ * recupera, así que la exclusión se queda de forma permanente. Si algún día
+ * aparece ese tramo por otra vía y se carga a `consumos_flota`, entonces sí
+ * se borra este renglón y junio vuelve a entrar solo.
  */
 incompletos AS (
   SELECT mes FROM UNNEST([DATE '2026-06-01']) AS mes
