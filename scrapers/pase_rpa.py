@@ -6,8 +6,10 @@ import calendar
 import json
 from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 from twocaptcha import TwoCaptcha
 import undetected_chromedriver as uc
 
@@ -27,6 +29,43 @@ _MESES_ES = {
 }
 
 _CLIENT_MAP_PATH = os.path.join(os.getcwd(), "descargas_temporales", "pase_client_map.json")
+_ESTADO_CORTES_PATH = os.path.join(os.getcwd(), "descargas_temporales", "pase_estado_cortes.json")
+
+# Los cortes POSPAGO cierran el día 11; a partir del 13 se espera uno nuevo.
+_DIA_INICIO_CICLO = 13
+
+
+def _ciclo_actual(hoy=None):
+    """Ciclo de facturación vigente: del día 13 de un mes al 12 del siguiente."""
+    hoy = hoy or datetime.date.today()
+    if hoy.day >= _DIA_INICIO_CICLO:
+        return f"{hoy.year:04d}-{hoy.month:02d}"
+    anterior = hoy.replace(day=1) - datetime.timedelta(days=1)
+    return f"{anterior.year:04d}-{anterior.month:02d}"
+
+
+def _cargar_estado_cortes():
+    if os.path.exists(_ESTADO_CORTES_PATH):
+        try:
+            with open(_ESTADO_CORTES_PATH, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            pass
+    return {}
+
+
+def _guardar_estado_cortes(estado):
+    os.makedirs(os.path.dirname(_ESTADO_CORTES_PATH), exist_ok=True)
+    with open(_ESTADO_CORTES_PATH, "w", encoding="utf-8") as fh:
+        json.dump(estado, fh, ensure_ascii=False, indent=2)
+
+
+def _fin_corte_archivo(path_archivo):
+    """Fecha fin (ISO) del rango con que se etiquetó el archivo descargado."""
+    match = re.search(r'_corte_\d{8}_a_(\d{8})', os.path.basename(str(path_archivo or "")))
+    if not match:
+        return None
+    return datetime.datetime.strptime(match.group(1), "%Y%m%d").date().isoformat()
 
 
 def _extraer_numero_cliente(texto):
@@ -211,6 +250,67 @@ def _wait_for_new_csv(descargas_dir, pre_files, timeout=40):
     return None
 
 
+def _buscar_boton_csv(driver, timeout=20):
+    """Localiza el botón CSV tolerando diferencias entre POSPAGO y DECENAL."""
+    xpaths = [
+        "//h6[contains(., 'DET. CRUCES')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']",
+        "//a[@title='Descargar archivo separado por comas']",
+        "//*[self::a or self::button][contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'csv') or contains(translate(@title, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'coma')]",
+        "//*[self::a or self::button][contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'csv')]",
+    ]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for xpath in xpaths:
+            for element in driver.find_elements(By.XPATH, xpath):
+                try:
+                    if element.is_displayed() and element.is_enabled():
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({block: 'center'});",
+                            element,
+                        )
+                        return element
+                except Exception:
+                    continue
+        time.sleep(0.5)
+    raise TimeoutException("No se encontró un botón de descarga CSV visible")
+
+
+def _guardar_diagnostico_pase(driver, descargas_dir, empresa, etapa):
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    empresa_segura = re.sub(r"[^A-Za-z0-9_-]+", "_", str(empresa or "cliente"))[:40]
+    base = os.path.join(descargas_dir, f"pase_{etapa}_{empresa_segura}_{timestamp}")
+    try:
+        driver.save_screenshot(f"{base}.png")
+        with open(f"{base}.html", "w", encoding="utf-8") as fh:
+            fh.write(driver.page_source)
+        print(f"Diagnóstico guardado: {base}.png / {base}.html")
+    except Exception as exc:
+        print(f"No se pudo guardar diagnóstico de Pase: {exc}")
+
+
+def _set_react_input(driver, element, value):
+    """Actualiza un input controlado y notifica el cambio al estado de React."""
+    driver.execute_script(
+        """
+        const input = arguments[0];
+        const value = arguments[1];
+        const setter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype, 'value'
+        ).set;
+        const previousValue = input.value;
+        setter.call(input, value);
+        if (input._valueTracker) {
+            input._valueTracker.setValue(previousValue);
+        }
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+        input.dispatchEvent(new Event('blur', {bubbles: true}));
+        """,
+        element,
+        value,
+    )
+
+
 def _stamp_download_with_period(downloaded_path, period_metadata):
     if not downloaded_path or not period_metadata:
         return downloaded_path
@@ -253,20 +353,92 @@ def _periodo_en_rango(texto, meses_objetivo):
     return _mes_objetivo_desde_periodo(texto, meses_objetivo) is not None
 
 
-def solve_recaptcha(sitekey, url):
+def _inventariar_periodos_cliente(driver, wait, numero_cliente, empresa, modalidad):
+    """Guarda los periodos visibles para conocer el calendario real de cortes."""
+    try:
+        dropdown = wait.until(EC.presence_of_element_located((
+            By.XPATH,
+            "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']",
+        )))
+        driver.execute_script("arguments[0].click();", dropdown)
+        time.sleep(1.5)
+        try:
+            opciones = WebDriverWait(driver, 4).until(
+                EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']"))
+            )
+        except TimeoutException:
+            opciones = []
+
+        periodos = []
+        for opcion in opciones:
+            texto = opcion.text.strip()
+            fechas = _resolver_fechas_periodo_pase(texto)
+            periodos.append({
+                "texto": texto,
+                "inicio": fechas[0].isoformat() if fechas else None,
+                "fin": fechas[1].isoformat() if fechas else None,
+            })
+
+        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        time.sleep(0.5)
+
+        output_path = os.path.join(
+            os.getcwd(),
+            "descargas_temporales",
+            "pase_periodos_detectados.json",
+        )
+        data = {}
+        if os.path.exists(output_path):
+            try:
+                with open(output_path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except Exception:
+                data = {}
+
+        key = str(numero_cliente or empresa or "sin_cliente")
+        data[key] = {
+            "empresa": empresa,
+            "modalidad": modalidad,
+            "capturado_en": datetime.datetime.now().isoformat(timespec="seconds"),
+            "periodos": periodos,
+        }
+        with open(output_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+
+        print(f"Periodos detectados para {empresa}: {len(periodos)}")
+        if not periodos:
+            print(f"Sin cortes disponibles para {empresa}; se omitirá esta cuenta.")
+        for periodo in periodos[:6]:
+            print(f"  - {periodo['texto']}")
+        print(f"Inventario de cortes guardado en: {output_path}")
+        return periodos
+    except Exception as exc:
+        print(f"No se pudo inventariar los periodos de {empresa}: {exc}")
+        try:
+            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        except Exception:
+            pass
+        return []
+
+
+def solve_recaptcha(sitekey, url, intentos=3, espera=15):
     print(f"Resolviendo captcha (sitekey: {sitekey})... esto puede tardar un poco.")
     solver = TwoCaptcha(TWOCAPTCHA_API_KEY)
-    
-    try:
-        result = solver.recaptcha(
-            sitekey=sitekey,
-            url=url
-        )
-        print("Captcha resuelto exitosamente!")
-        return result['code']
-    except Exception as e:
-        print(f"Error resolviendo captcha: {e}")
-        return None
+
+    # 2Captcha responde de vez en cuando con errores transitorios (p. ej. 521).
+    for intento in range(1, intentos + 1):
+        try:
+            result = solver.recaptcha(
+                sitekey=sitekey,
+                url=url
+            )
+            print("Captcha resuelto exitosamente!")
+            return result['code']
+        except Exception as e:
+            print(f"Error resolviendo captcha (intento {intento} de {intentos}): {e}")
+            if intento < intentos:
+                time.sleep(espera)
+    return None
 
 def _descargar_prepago(driver, wait, backfill_mode=False, meses_objetivo=None):
     """Flujo de descarga para cuentas PREPAGO (pestaña CRUCES con filtro por mes)."""
@@ -591,10 +763,46 @@ def _scrape_tags(driver, wait):
             pass
 
 
-def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False, with_tags=False, headless=False):
+def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False,
+         with_tags=False, headless=False, clientes=None, posiciones=None,
+         hasta_nuevo_corte=False):
+    """Devuelve 0 si terminó bien; 2 si con --hasta-nuevo-corte quedan clientes sin corte nuevo."""
     print("Iniciando RPA para Pase...")
+    ciclo = _ciclo_actual()
+    estado_cortes = _cargar_estado_cortes()
+    completados = {
+        numero for numero, info in estado_cortes.items()
+        if info.get("ciclo") == ciclo
+    } if hasta_nuevo_corte else set()
+    numeros_solicitados = {str(c).strip() for c in (clientes or []) if str(c).strip().isdigit()}
+    fines_ingestados = {}
+
+    if hasta_nuevo_corte:
+        print(f"Ciclo de cortes vigente: {ciclo}")
+        if numeros_solicitados and numeros_solicitados <= completados:
+            print("✅ Todos los clientes solicitados ya tienen el corte de este ciclo. Nada que hacer.")
+            return 0
+        clientes = [c for c in (clientes or []) if str(c).strip() not in completados]
+
     mapa_clientes = _cargar_mapa_clientes()
     all_scraped_tags = {}
+    clientes_objetivo = {
+        str(cliente).strip().upper()
+        for cliente in (clientes or [])
+        if str(cliente).strip()
+    }
+    # El selector actualmente puede mostrar sólo la razón social. Incorporar
+    # los alias conocidos permite seguir aceptando números de cliente en CLI.
+    clientes_objetivo.update(
+        str(mapa_clientes.get("by_number", {}).get(cliente, "")).strip().upper()
+        for cliente in list(clientes_objetivo)
+        if mapa_clientes.get("by_number", {}).get(cliente)
+    )
+    posiciones_objetivo = {
+        int(posicion) - 1
+        for posicion in (posiciones or [])
+        if str(posicion).strip().isdigit() and int(posicion) > 0
+    }
     
     if not TWOCAPTCHA_API_KEY:
         print("ERROR: Por favor agrega tu TWOCAPTCHA_API_KEY al archivo .env")
@@ -653,7 +861,10 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
     try:
         indice_actual = start_from
         num_clientes = start_from + 1  # Se actualizará en la primera pasada
-        
+        indices_clientes_objetivo = None
+        intentos_login = 0
+        max_intentos_login = 3
+
         while indice_actual < num_clientes:
             print(f"\n{'='*50}")
             print(f"🔄 PROCESANDO CLIENTE {indice_actual + 1} DE {num_clientes if num_clientes > 1 else '?'}")
@@ -690,8 +901,8 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
             pwd_input = wait.until(EC.presence_of_element_located((By.ID, "password")))
             
             print("Ingresando credenciales...")
-            user_input.send_keys(PASE_USER)
-            pwd_input.send_keys(PASE_PASSWORD)
+            # Se escriben después del callback del captcha. La aplicación React
+            # vuelve a renderizar aquí y borraría valores introducidos antes.
             
             # 2. ReCaptcha
             print("Buscando widget de ReCaptcha para obtener el sitekey...")
@@ -749,19 +960,73 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                 
             # 3. Clic en Entrar
             print("Haciendo clic en Entrar...")
-            # Ubicar el botón "Entrar" usando XPATHs alternativos para mayor tolerancia a variaciones
-            try:
-                continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[text()='Entrar']]")))
-            except Exception:
-                print("⚠️ No se encontró por span[text()='Entrar'], intentando XPATH alternativo con contains...")
-                continue_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Entrar')]")))
-            continue_btn.click()
+            # El callback de reCAPTCHA provoca un re-render de React que puede
+            # restaurar el estado anterior y vaciar ambos campos.
+            user_input = driver.find_element(By.ID, "username")
+            pwd_input = driver.find_element(By.ID, "password")
+            print("Escribiendo credenciales después de validar el captcha...")
+            _set_react_input(driver, user_input, PASE_USER)
+            _set_react_input(driver, pwd_input, PASE_PASSWORD)
+            time.sleep(1)
+            # Algunos despliegues envían el formulario desde el callback del captcha.
+            # Si ya aparece el selector de cliente, no debemos seguir esperando un
+            # botón de login que dejó de existir.
+            client_selector_xpath = (
+                "//input[@name='cliente']/preceding-sibling::*[@role='button'][1]"
+                " | //input[@name='cliente']/preceding-sibling::div[1]"
+                "//*[@role='button']"
+            )
+            if driver.find_elements(By.XPATH, client_selector_xpath):
+                print("El formulario se envió automáticamente después del captcha.")
+            else:
+                login_xpaths = [
+                    "//button[.//span[normalize-space()='Entrar']]",
+                    "//button[contains(normalize-space(.), 'Entrar')]",
+                    "//button[@type='submit']",
+                    "//input[@type='submit']",
+                ]
+                continue_btn = None
+                for login_xpath in login_xpaths:
+                    try:
+                        continue_btn = WebDriverWait(driver, 5).until(
+                            EC.presence_of_element_located((By.XPATH, login_xpath))
+                        )
+                        break
+                    except TimeoutException:
+                        continue
+                if continue_btn is None:
+                    _guardar_diagnostico_pase(driver, descargas_dir, "login", "sin_boton_entrar")
+                    raise TimeoutException("No se encontró el botón de acceso ni el selector de cliente")
+                driver.execute_script("arguments[0].click();", continue_btn)
             
             # Esperar a que cargue la pantalla de selección de cliente
             print("\nEsperando la pantalla de selección de cliente...")
             
             # El desplegable es un div personalizado de Material-UI. Lo buscamos a través de su input oculto.
-            dropdown_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@name='cliente']/preceding-sibling::div[@role='button']")))
+            try:
+                dropdown_btn = wait.until(
+                    EC.presence_of_element_located((By.XPATH, client_selector_xpath))
+                )
+            except TimeoutException:
+                _guardar_diagnostico_pase(
+                    driver,
+                    descargas_dir,
+                    "login",
+                    "sin_selector_cliente",
+                )
+                # Reintentar con credenciales rechazadas puede bloquear la cuenta.
+                if "contraseña incorrectos" in driver.page_source:
+                    raise RuntimeError(
+                        "Pase rechazó las credenciales (Usuario y/o contraseña incorrectos). "
+                        "Revisa PASE_USER / PASE_PASSWORD en el .env."
+                    )
+                intentos_login += 1
+                if intentos_login >= max_intentos_login:
+                    raise
+                print(f"⚠️ No apareció el selector de cliente. Reintentando inicio de sesión "
+                      f"({intentos_login + 1} de {max_intentos_login})...")
+                continue
+            intentos_login = 0
             print("Abriendo el menú desplegable...")
             driver.execute_script("arguments[0].click();", dropdown_btn)
             
@@ -771,6 +1036,33 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
             # Localizar todas las opciones (li con role='option')
             opciones = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']")))
             num_clientes = len(opciones)
+
+            if clientes_objetivo or posiciones_objetivo:
+                indices_objetivo = []
+                for opcion_idx, opcion in enumerate(opciones):
+                    texto_opcion = opcion.text.strip()
+                    numero_opcion = _extraer_numero_cliente(texto_opcion)
+                    texto_normalizado = texto_opcion.upper()
+                    coincide_cliente = any(
+                        objetivo == str(numero_opcion or "").upper()
+                        or objetivo in texto_normalizado
+                        for objetivo in clientes_objetivo
+                    )
+                    if numero_opcion and numero_opcion in completados:
+                        continue
+                    if coincide_cliente or opcion_idx in posiciones_objetivo:
+                        indices_objetivo.append(opcion_idx)
+
+                indices_clientes_objetivo = indices_objetivo
+
+                siguiente = next(
+                    (idx for idx in indices_objetivo if idx >= indice_actual),
+                    None,
+                )
+                if siguiente is None:
+                    print("✅ Ya se procesaron todos los clientes solicitados.")
+                    break
+                indice_actual = siguiente
             
             if num_clientes > 0 and indice_actual < num_clientes:
                 print(f"Seleccionando cliente {indice_actual + 1} de {num_clientes}...")
@@ -795,7 +1087,10 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
 
                 print("Haciendo clic en 'Continuar'...")
                 btn_continuar = driver.find_element(By.XPATH, "//button[span[contains(text(), 'Continuar')]]")
-                btn_continuar.click()
+                driver.execute_script("arguments[0].click();", btn_continuar)
+                WebDriverWait(driver, 30).until(
+                    EC.invisibility_of_element_located((By.XPATH, client_selector_xpath))
+                )
 
                 print(f"\nPanel principal cargado.")
 
@@ -806,7 +1101,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                     try:
                         # Intentar XPath original (cliente 1-4)
                         elem = driver.find_element(By.XPATH, "//span[normalize-space(text())='Modalidad']/following-sibling::h6")
-                        text = elem.text.strip()
+                        text = (elem.get_attribute("textContent") or "").strip()
                         if text:
                             return elem
                     except:
@@ -815,7 +1110,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                     try:
                         # Fallback: buscar h6 que contiene PREPAGO/POSPAGO/DECENAL directamente
                         elem = driver.find_element(By.XPATH, "//h6[contains(., 'PREPAGO') or contains(., 'POSPAGO') or contains(., 'DECENAL')]")
-                        text = elem.text.strip()
+                        text = (elem.get_attribute("textContent") or "").strip()
                         if text:
                             return elem
                     except:
@@ -824,9 +1119,31 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                     return False
 
                 wait_largo = WebDriverWait(driver, 15)
-                modalidad_elem = wait_largo.until(modalidad_cargada)
-                modalidad = modalidad_elem.text.strip().upper()
+                try:
+                    modalidad_elem = wait_largo.until(modalidad_cargada)
+                except TimeoutException:
+                    _guardar_diagnostico_pase(
+                        driver,
+                        descargas_dir,
+                        empresa_limpia,
+                        "sin_modalidad",
+                    )
+                    raise
+                modalidad = (modalidad_elem.get_attribute("textContent") or "").strip().upper()
                 print(f"Modalidad detectada: {modalidad}")
+
+                if backfill_mode:
+                    periodos_disponibles = _inventariar_periodos_cliente(
+                        driver,
+                        wait,
+                        numero_cliente_actual,
+                        empresa_limpia,
+                        modalidad,
+                    )
+                else:
+                    # La corrida mensual trabaja sobre el periodo ya visible.
+                    # Abrir el inventario altera el estado del Select de MUI.
+                    periodos_disponibles = [{"texto": "periodo actual"}]
 
                 try:
                     periodo_por_archivo = {}
@@ -838,12 +1155,23 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                             )
                         elif modalidad not in ("POSPAGO", "DECENAL"):
                             print(f"⚠️ Modalidad '{modalidad}' no soportada, omitiendo descargas.")
+                        elif not periodos_disponibles:
+                            print(f"Sin periodos descargables para {empresa_limpia}. Continuando con el siguiente cliente.")
                         else:
                             if modalidad == "DECENAL":
                                 print("Modalidad DECENAL: usando flujo equivalente a POSPAGO.")
-                            xpath_csv_btn = "//h6[contains(text(), 'DET. CRUCES (NUEVO)')]/ancestor::div[3]//a[@title='Descargar archivo separado por comas']"
-                            wait_corto = WebDriverWait(driver, 5)
-
+                                periodo_dropdown = wait.until(EC.presence_of_element_located((
+                                    By.XPATH,
+                                    "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']",
+                                )))
+                                driver.execute_script("arguments[0].click();", periodo_dropdown)
+                                opciones_decenal = wait.until(
+                                    EC.presence_of_all_elements_located((By.XPATH, "//li[@role='option']"))
+                                )
+                                if not opciones_decenal:
+                                    raise TimeoutException("No hay periodos DECENAL disponibles")
+                                driver.execute_script("arguments[0].click();", opciones_decenal[0])
+                                time.sleep(5)
                             if backfill_mode:
                                 periodo_dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@placeholder='Periodo']/preceding-sibling::div[@role='button']")))
                                 periodo_dropdown.click()
@@ -879,7 +1207,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                     opciones_iter[i].click()
                                     time.sleep(6)
                                     pre_files = set(os.listdir(descargas_dir))
-                                    btn_csv_i = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                    btn_csv_i = _buscar_boton_csv(driver)
                                     btn_csv_i.click()
                                     time.sleep(10)
                                     downloaded_path = _wait_for_new_csv(descargas_dir, pre_files)
@@ -896,7 +1224,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                 print("✅ Descarga de periodos completada.")
                             else:
                                 pre_files = set(os.listdir(descargas_dir))
-                                btn_csv_actual = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                btn_csv_actual = _buscar_boton_csv(driver)
                                 print("Descargando archivo CSV del corte actual...")
                                 btn_csv_actual.click()
                                 time.sleep(5)
@@ -939,7 +1267,7 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                         opciones_periodo[1].click()
                                         time.sleep(6)
                                         pre_files = set(os.listdir(descargas_dir))
-                                        btn_csv_anterior = wait_corto.until(EC.element_to_be_clickable((By.XPATH, xpath_csv_btn)))
+                                        btn_csv_anterior = _buscar_boton_csv(driver)
                                         print("Descargando archivo CSV del corte anterior...")
                                         btn_csv_anterior.click()
                                         print("\nEsperando 15 segundos para asegurar que ambos archivos se terminen de descargar...")
@@ -980,6 +1308,11 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                                     df_limpio = bq_ingestion.procesar_pase(archivo, empresa=empresa_archivo)
                                     if df_limpio is not None:
                                         bq_ingestion.ingest_to_bigquery(df_limpio)
+                                    fin_corte = _fin_corte_archivo(archivo)
+                                    if numero_cliente_actual and fin_corte:
+                                        fines_ingestados[numero_cliente_actual] = max(
+                                            fin_corte, fines_ingestados.get(numero_cliente_actual, "")
+                                        )
                                 except Exception as e:
                                     print(f"❌ Error al procesar datos descargados de {archivo}: {e}")
                                 finally:
@@ -1027,7 +1360,32 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                     import traceback
                     print(f"⚠️ Error en descargas/ingesta: {e}")
                     traceback.print_exc()
+                    _guardar_diagnostico_pase(
+                        driver,
+                        descargas_dir,
+                        empresa_limpia,
+                        "descarga",
+                    )
                 
+                if hasta_nuevo_corte and numero_cliente_actual:
+                    fin_nuevo = fines_ingestados.get(numero_cliente_actual)
+                    previo = estado_cortes.get(numero_cliente_actual, {})
+                    if fin_nuevo and fin_nuevo > previo.get("ultimo_fin", ""):
+                        estado_cortes[numero_cliente_actual] = {
+                            "empresa": empresa_limpia,
+                            "ciclo": ciclo,
+                            "ultimo_fin": fin_nuevo,
+                            "actualizado": datetime.datetime.now().isoformat(timespec="seconds"),
+                        }
+                        _guardar_estado_cortes(estado_cortes)
+                        completados.add(numero_cliente_actual)
+                        print(f"✅ Corte nuevo para {empresa_limpia}: hasta {fin_nuevo}. Ciclo {ciclo} completado.")
+                    else:
+                        print(
+                            f"⏳ Sin corte nuevo para {empresa_limpia} (último registrado: "
+                            f"{previo.get('ultimo_fin') or 'ninguno'}). Se reintentará en la próxima corrida."
+                        )
+
                 # --- 6. Cerrar Sesión ---
                 print("\nCerrando sesión para continuar con la siguiente empresa...")
                 time.sleep(1.5)  # Esperar que desaparezcan overlays/backdrops de MUI
@@ -1052,6 +1410,13 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
                 print("No se encontraron clientes o se alcanzó el límite.")
             
             indice_actual += 1
+            if (
+                (clientes_objetivo or posiciones_objetivo)
+                and indices_clientes_objetivo is not None
+                and not any(idx >= indice_actual for idx in indices_clientes_objetivo)
+            ):
+                print("✅ Todos los clientes solicitados fueron procesados.")
+                break
 
         if (only_tags or with_tags) and all_scraped_tags:
             json_path = os.path.join("HTML_PASE", "tags_mapeados.json")
@@ -1067,9 +1432,17 @@ def main(backfill_mode=False, meses_objetivo=None, start_from=0, only_tags=False
             with open(json_path, "w", encoding="utf-8") as fh:
                 json.dump(existing_tags, fh, ensure_ascii=False, indent=2)
             print(f"✅ Se guardaron {len(all_scraped_tags)} tags (Total consolidado: {len(existing_tags)}) en {json_path}")
-            
+
+        if hasta_nuevo_corte:
+            pendientes = sorted(numeros_solicitados - completados)
+            if pendientes:
+                print(f"⏳ Clientes sin corte nuevo en el ciclo {ciclo}: {', '.join(pendientes)}")
+                return 2
+        return 0
+
     except Exception as e:
         print(f"Ocurrió un error en el flujo: {type(e).__name__} - {e}")
+        raise
     finally:
         print("Cerrando el navegador...")
         driver.quit()
@@ -1080,5 +1453,23 @@ if __name__ == "__main__":
     parser.add_argument("--backfill", action="store_true", help="Ejecutar en modo backfill")
     parser.add_argument("--only-tags", action="store_true", help="Solo descargar mapeo de Tags")
     parser.add_argument("--with-tags", action="store_true", help="Descargar consumos y mapeo de Tags")
+    parser.add_argument("--clientes", help="Números o nombres de clientes separados por coma")
+    parser.add_argument("--posiciones", help="Posiciones de clientes separadas por coma (por ejemplo: 3)")
+    parser.add_argument(
+        "--hasta-nuevo-corte",
+        action="store_true",
+        help="Omitir clientes que ya tienen el corte del ciclo vigente y salir con código 2 si alguno sigue pendiente",
+    )
     args = parser.parse_args()
-    main(backfill_mode=args.backfill, only_tags=args.only_tags, with_tags=args.with_tags)
+    clientes = [item.strip() for item in (args.clientes or "").split(",") if item.strip()]
+    posiciones = [item.strip() for item in (args.posiciones or "").split(",") if item.strip()]
+    codigo = main(
+        backfill_mode=args.backfill,
+        only_tags=args.only_tags,
+        with_tags=args.with_tags,
+        clientes=clientes,
+        posiciones=posiciones,
+        hasta_nuevo_corte=args.hasta_nuevo_corte,
+    )
+    # main() devuelve None en las salidas tempranas por error (credenciales, WAF).
+    raise SystemExit(1 if codigo is None else codigo)
