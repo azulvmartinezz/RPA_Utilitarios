@@ -93,7 +93,9 @@ def _apply_backfill_period_filter(df):
 
 
 def ensure_aux_columns(project_id=None):
-    client = bigquery.Client()
+    # El proyecto va explícito: sin él, los jobs corren en el proyecto por
+    # defecto de la cuenta de gcloud, que puede no tener permisos de BigQuery.
+    client = bigquery.Client(project=project_id or os.getenv('GCP_PROJECT_ID'))
     table_id = _table_id(project_id)
     for column_name in ("Empresa", "Id_Origen", "Archivo_Origen"):
         sql = f"ALTER TABLE `{table_id}` ADD COLUMN IF NOT EXISTS {column_name} STRING"
@@ -104,7 +106,7 @@ def delete_month(sistema, year, month, project_id=None):
     if sistema not in _VALID_SYSTEMS:
         raise ValueError(f"Sistema no permitido: {sistema}")
     project_id = project_id or os.getenv('GCP_PROJECT_ID')
-    client = bigquery.Client()
+    client = bigquery.Client(project=project_id)
     dataset = _safe_identifier(os.getenv('BQ_DATASET', 'rpa_utilitarios'), "BQ_DATASET")
     table = _safe_identifier(os.getenv('BQ_TABLE', 'consumos_flota'), "BQ_TABLE")
     table_id = f"{project_id}.{dataset}.{table}"
@@ -151,7 +153,7 @@ def ingest_to_bigquery(df, project_id=None):
     project_id = project_id or os.getenv('GCP_PROJECT_ID')
     if not project_id:
         raise ValueError("GCP_PROJECT_ID no está definido en el archivo .env")
-    client = bigquery.Client()
+    client = bigquery.Client(project=project_id)
     table_id = _table_id(project_id)
     ensure_aux_columns(project_id)
     
