@@ -306,6 +306,11 @@ def ejecutar(desde: dt.date, hasta: dt.date, empresa: str | None = None, en_seco
         if not tabla.empty:
             tablas.append(tabla)
 
+    # Que fallen todas no es «no hubo cargas»: casi siempre son contraseñas
+    # rotadas. Así se quedó parado del 2026-10-10 al 28 con salida 0.
+    if cuentas and len(fallidas) == len(cuentas):
+        raise RuntimeError(f"Fallaron las {len(cuentas)} cuentas de Supramax; no se leyó nada.")
+
     if not tablas:
         print("⚠️ Ninguna cuenta trajo cargas en el periodo.")
         return 0
