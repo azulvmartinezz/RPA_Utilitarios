@@ -97,6 +97,8 @@ TIPOS_TARJETA_SUPRAMAX = (5, 1)
 TIPO_TARJETA_SUPRAMAX_NUEVA = 5
 
 IDV_RE = re.compile(r"idv=(\d+)")
+# El tag de Supramax: hexadecimal de 12 a 16 caracteres («53A16E4A500001»).
+TAG_RE = re.compile(r"[0-9A-Fa-f]{12,16}")
 
 # "PRE-1234", "pre 1234", "PRE1234" -- mismo criterio que
 # `PrestacionesService.esPrestacion()` en el backend: letras "PRE" seguidas
@@ -122,12 +124,10 @@ def _credito_valido(credito: Decimal) -> bool:
 
 
 def _parsear_filas(html: str) -> list[dict]:
-    """Cada `<tr>` del listado trae: link con `idv`, Placas, Tipo (nombre del
-    conductor -- mal rotulado en el portal, se ignora), Marca (número interno,
-    se ignora), Tag, Crédito. Confirmado leyendo
-    `html_pages/supramax/listado_dispersion.html` real: las columnas por
-    posición son estables aunque el encabezado "Tipo" no describa lo que
-    trae."""
+    """Cada `<tr>` del listado trae: link con `idv`, Placas, nombre del
+    conductor, número interno, Tag y Crédito. Las placas van fijas en la
+    segunda celda; el tag y el crédito se buscan por su forma porque el
+    portal ya cambió las columnas una vez (octubre de 2026)."""
     soup = BeautifulSoup(html, "html.parser")
     tabla = soup.find("table", id="reporte")
     if not tabla:
@@ -149,16 +149,32 @@ def _parsear_filas(html: str) -> list[dict]:
         if not m:
             continue
 
+        textos = [c.get_text(strip=True) for c in celdas]
+
+        # El tag y el crédito se reconocen por su FORMA, no por su posición:
+        # a principios de octubre de 2026 el portal metió una columna vacía
+        # antes del tag y todo se recorrió un lugar. El robot leyó el tag
+        # vacío en todas las filas -todas cruzaban con la misma prestación de
+        # folio vacío y se pisaban entre sí- y el tag como crédito
+        # («5.358E+368700004»). 213 tarjetas se quedaron con su saldo del
+        # 5 de octubre sin que nada fallara.
+        tag = next((t for t in textos[2:] if TAG_RE.fullmatch(t)), "")
+        credito = next((t for t in textos[2:] if t.startswith("$")), None)
+
         filas.append(
             {
                 "idv": m.group(1),
-                "placas": celdas[1].get_text(strip=True),
-                "tag": celdas[4].get_text(strip=True),
-                "credito": a_decimal(celdas[5].get_text(strip=True)),
+                "placas": textos[1],
+                "tag": tag,
+                "credito": a_decimal(credito) if credito is not None else None,
             }
         )
 
     return filas
+
+
+# Ver `_recolectar_todas_las_filas`: con 25 filas por página son 1,250 tarjetas.
+PAGINAS_MAXIMAS = 50
 
 
 def _recolectar_todas_las_filas(driver, wait) -> list[dict]:
@@ -170,14 +186,24 @@ def _recolectar_todas_las_filas(driver, wait) -> list[dict]:
     filas: list[dict] = []
     vistos: set[str] = set()
 
-    while True:
+    # Tope de páginas y salida si una página no trae nada nuevo: el 27-10-2026
+    # la cuenta IMAA se quedó 10 minutos aquí -- el botón «siguiente» nunca se
+    # marcó deshabilitado y el ciclo volvía a hacer clic sobre la misma
+    # página, con el pool entero esperándola. Ninguna cuenta pasa de unas
+    # cuantas páginas; si una página repite lo ya visto, ya se terminó.
+    for _pagina in range(PAGINAS_MAXIMAS):
         WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "reporte")))
         time.sleep(0.3)
 
+        nuevas = 0
         for fila in _parsear_filas(driver.page_source):
             if fila["idv"] not in vistos:
                 vistos.add(fila["idv"])
                 filas.append(fila)
+                nuevas += 1
+
+        if nuevas == 0 and filas:
+            break
 
         try:
             siguiente = driver.find_element(By.ID, "reporte_next")
@@ -419,6 +445,14 @@ def _guardar_resultados(conexion, resultados) -> dict:
                 # docstring del módulo -- nu_foliotarjeta guarda el tag, el
                 # idv es solo el identificador de sesión del portal.
                 tag_norm = fila["tag"].strip().upper()
+
+                # Sin tag no hay con qué cruzar. Antes se buscaba igual: la
+                # primera prestación sin tag se catalogaba con folio vacío y
+                # desde ahí TODAS las filas sin tag caían en esa tarjeta.
+                if not tag_norm:
+                    total_sin_cruce += 1
+                    continue
+
                 match = mapa.get(tag_norm)
 
                 if not match and _es_prestacion(fila["placas"]):

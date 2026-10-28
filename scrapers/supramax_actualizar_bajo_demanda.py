@@ -88,10 +88,33 @@ class Avance:
             self._conexion = None
 
     def _ejecutar(self, sql: str, parametros: tuple) -> None:
-        if self._conexion is None:
-            return
-        with self._candado, self._conexion.cursor() as cursor:
-            cursor.execute(sql, parametros)
+        """Nunca truena: si la conexion se cayo, reconecta una vez y reintenta;
+        si tampoco, avisa y sigue.
+
+        El 27-10-2026 la conexion se perdio a los dos minutos de empezar
+        («could not receive data from server») y no volvio: el avance se quedo
+        congelado en pantalla y, peor, `fase("GUARDANDO")` lanzo el error y
+        tumbo la rutina ANTES de guardar los saldos que ya se habian leido. Un
+        dato que solo informa no puede costar el trabajo.
+        """
+        with self._candado:
+            for intento in (1, 2):
+                try:
+                    if self._conexion is None or self._conexion.closed:
+                        self._conexion = conectar_postgres()
+                        self._conexion.autocommit = True
+                    with self._conexion.cursor() as cursor:
+                        cursor.execute(sql, parametros)
+                    return
+                except Exception as error:  # noqa: BLE001
+                    try:
+                        if self._conexion is not None:
+                            self._conexion.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._conexion = None
+                    if intento == 2:
+                        print(f"⚠️ No se pudo reportar el avance: {error}")
 
     def iniciar(self, cuentas: list[str]) -> None:
         """Todas las cuentas en cola, y el job en fase CONSULTANDO."""
@@ -207,6 +230,29 @@ def _marcar_fallido(cursor, id_job: int, mensaje: str) -> None:
     )
 
 
+def _conexion_viva(conexion):
+    """La misma conexión si todavía responde; si no, una nueva.
+
+    La del job se abre al empezar y pasa la raspada entera -cinco minutos o
+    más- sin usarse. El 27-10-2026 llegó muerta al final y el job no se pudo
+    ni marcar: se quedó EN_PROCESO hasta que alguien mató el proceso.
+    """
+    try:
+        if not conexion.closed:
+            with conexion.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            return conexion
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        conexion.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    return conectar_postgres()
+
+
 def main() -> int:
     conexion = conectar_postgres()
     try:
@@ -239,6 +285,7 @@ def main() -> int:
             # falle el login individualmente (ver más abajo).
             mensaje = f"{type(error).__name__}: {error}"
             print(f"❌ La rutina de actualización de saldos no pudo correr: {mensaje}")
+            conexion = _conexion_viva(conexion)
             with conexion.cursor() as cursor:
                 _marcar_fallido(cursor, id_job, mensaje)
             conexion.commit()
@@ -248,6 +295,9 @@ def main() -> int:
 
         total_cuentas = stats.get("total_cuentas", 0)
         total_login_ok = stats.get("total_login_ok", 0)
+
+        # La de arriba pasó toda la raspada sin usarse: puede estar muerta.
+        conexion = _conexion_viva(conexion)
 
         if total_cuentas > 0 and total_login_ok == 0:
             # Ninguna cuenta se pudo ni siquiera loguear: no es el fallo

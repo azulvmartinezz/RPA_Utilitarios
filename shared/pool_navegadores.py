@@ -159,6 +159,9 @@ def _build_chrome_options(perfil_dir: str, headless: bool, descargas_dir: str | 
     return opciones
 
 
+SEGUNDOS_CARGA_PAGINA = 60
+
+
 def crear_driver(perfil_dir: str, headless: bool = True, descargas_dir: str | None = None):
     """Arranca un Chrome con perfil dedicado, con la misma resiliencia de
     arranque que `supramax_rpa.py::_create_driver` (Selenium Manager primero,
@@ -213,6 +216,11 @@ def _correr_cuenta(
 
     try:
         driver = crear_driver(perfil_dir, headless=headless, descargas_dir=descargas_dir)
+        # Una página que no termina de cargar truena a los 60 s en vez de
+        # dejar el hilo -- y con él al pool entero, que espera a todos --
+        # colgado sin límite. Ver el atoro de IMAA del 27-10-2026.
+        driver.set_page_load_timeout(SEGUNDOS_CARGA_PAGINA)
+        driver.set_script_timeout(SEGUNDOS_CARGA_PAGINA)
         resultado = funcion_por_cuenta(driver, cuenta)
         return ResultadoCuenta(cuenta=cuenta, resultado=resultado)
     except Exception as error:  # noqa: BLE001
