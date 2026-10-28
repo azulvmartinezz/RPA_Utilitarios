@@ -555,17 +555,49 @@ def process_account(driver, username, password, fini_override=None, ffin_overrid
     return scraped_tags if (only_tags or with_tags) else fallos
 
 
-def main(fini_override=None, ffin_override=None, headless=False):
+def _rango_incremental(lookback_days=3, initial_lookback_days=35):
+    """Calcula el rango pendiente hasta ayer usando BigQuery como checkpoint."""
+    from bigquery.bq_ingestion import get_last_ingested_date
+
+    ayer = datetime.date.today() - datetime.timedelta(days=1)
+    ultima_fecha = get_last_ingested_date("Supramax")
+
+    if ultima_fecha:
+        # Releer algunos días captura movimientos tardíos y permite recuperar
+        # corridas parcialmente exitosas. El MERGE evita duplicados.
+        inicio = ultima_fecha - datetime.timedelta(days=max(lookback_days - 1, 0))
+        origen = f"última fecha en BigQuery: {ultima_fecha:%d/%m/%Y}"
+    else:
+        inicio = ayer - datetime.timedelta(days=max(initial_lookback_days - 1, 0))
+        origen = "sin registros previos en BigQuery"
+
+    if inicio > ayer:
+        return None
+
+    print(f"Modo incremental ({origen})")
+    print(f"Rango calculado: {inicio:%d/%m/%Y} -> {ayer:%d/%m/%Y}")
+    return inicio.strftime("%d/%m/%Y"), ayer.strftime("%d/%m/%Y")
+
+
+def main(fini_override=None, ffin_override=None, headless=False, incremental=False,
+         lookback_days=3, initial_lookback_days=35):
     import argparse
     parser = argparse.ArgumentParser(description="RPA para Supramax")
     parser.add_argument("--only-tags", action="store_true", help="Solo descarga y actualiza la lista de tags/vehículos activos")
     parser.add_argument("--with-tags", action="store_true", help="Descarga los reportes de consumos y actualiza la lista de tags/vehículos activos")
     parser.add_argument("--headless", action="store_true", help="Ejecutar en modo silencioso")
+    parser.add_argument("--incremental", action="store_true", help="Descargar desde la última fecha de Supramax en BigQuery hasta ayer")
+    parser.add_argument("--lookback-days", type=int, default=lookback_days, help="Días que se releen para capturar movimientos tardíos (default: 3)")
+    parser.add_argument("--initial-lookback-days", type=int, default=initial_lookback_days, help="Ventana inicial si BigQuery no tiene datos (default: 35)")
     
     args, unknown = parser.parse_known_args()
     
     if args.headless:
         headless = True
+    if args.incremental:
+        incremental = True
+    lookback_days = max(args.lookback_days, 1)
+    initial_lookback_days = max(args.initial_lookback_days, 1)
 
     print("Iniciando RPA para Supramax...")
     
@@ -581,6 +613,13 @@ def main(fini_override=None, ffin_override=None, headless=False):
         print(f"ERROR: El contenido de SUPRAMAX_CREDENTIALS no es un JSON válido. ({e})")
         return
     
+    if incremental and not (fini_override and ffin_override):
+        rango = _rango_incremental(lookback_days, initial_lookback_days)
+        if not rango:
+            print("✅ Supramax ya está actualizado hasta ayer. No hay nada que descargar.")
+            return
+        fini_override, ffin_override = rango
+
     descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
     os.makedirs(descargas_dir, exist_ok=True)
     chrome_options = _build_chrome_options(headless, descargas_dir)

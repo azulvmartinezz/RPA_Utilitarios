@@ -122,6 +122,31 @@ def delete_month(sistema, year, month, project_id=None):
     print(f"🗑️  Borrados registros de {sistema} para {year}-{month:02d}")
 
 
+def get_last_ingested_date(sistema, project_id=None):
+    """Devuelve la fecha más reciente cargada para un sistema, o ``None``."""
+    if sistema not in _VALID_SYSTEMS:
+        raise ValueError(f"Sistema no permitido: {sistema}")
+
+    project_id = project_id or os.getenv('GCP_PROJECT_ID')
+    if not project_id:
+        raise ValueError("GCP_PROJECT_ID no está definido en el archivo .env")
+
+    client = bigquery.Client(project=project_id)
+    table_id = _table_id(project_id)
+    query = f"""
+        SELECT MAX(Fecha) AS ultima_fecha
+        FROM `{table_id}`
+        WHERE Sistema = @sistema
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("sistema", "STRING", sistema),
+        ]
+    )
+    row = next(iter(client.query(query, job_config=job_config).result()), None)
+    return row.ultima_fecha if row and row.ultima_fecha else None
+
+
 def ingest_to_bigquery(df, project_id=None):
     project_id = project_id or os.getenv('GCP_PROJECT_ID')
     if not project_id:
