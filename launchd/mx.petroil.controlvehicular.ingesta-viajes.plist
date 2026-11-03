@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>mx.petroil.controlvehicular.ingesta-viajes</string>
+
+	<!--
+		Python del .venv directo, como los agentes de Supramax. Con /bin/bash
+		launchd no puede leer un script dentro de ~/Documents (salía 126).
+		Se piden 7 días: la carga fusiona por (dev_id, fh_inicio), así que una
+		noche perdida se recupera sola en la siguiente.
+	-->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios/.venv/bin/python</string>
+		<string>-m</string>
+		<string>extractors.fleetup_viajes</string>
+		<string>--dias</string>
+		<string>7</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios</string>
+
+	<key>StandardOutPath</key>
+	<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios/logs_orquestador/launchd_ingesta_viajes.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios/logs_orquestador/launchd_ingesta_viajes.log</string>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<!-- 3:00 a. m.; si la Mac estaba dormida, launchd la corre al despertar. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>3</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+</dict>
+</plist>
