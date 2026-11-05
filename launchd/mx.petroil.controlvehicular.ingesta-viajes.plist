@@ -15,7 +15,7 @@
 	<array>
 		<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios/.venv/bin/python</string>
 		<string>-m</string>
-		<string>extractors.fleetup_viajes</string>
+		<string>jobs_programados.fleetup_viajes</string>
 		<string>--dias</string>
 		<string>7</string>
 	</array>

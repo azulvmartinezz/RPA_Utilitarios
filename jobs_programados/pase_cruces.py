@@ -20,8 +20,8 @@ y así no hace falta una llave de deduplicación que dependa del texto crudo de
 cada renglón.
 
 Uso:
-    python -m extractors.pase_cruces
-    python -m extractors.pase_cruces --limite 5    # prueba corta
+    python -m jobs_programados.pase_cruces
+    python -m jobs_programados.pase_cruces --limite 5    # prueba corta
 """
 
 import argparse

@@ -576,14 +576,14 @@ def cotizar_unidad(
 
 def main() -> int:
     """Prueba manual:
-    `python -m scrapers.libroazul_precio_rpa <id_unidad> <marca> <modelo> <anio> <version> <condicion> [id_usuario]`.
+    `python -m jobs_por_evento.libroazul_precio_rpa <id_unidad> <marca> <modelo> <anio> <version> <condicion> [id_usuario]`.
     No usa la cola -- cotiza directo, igual que hará
     `libroazul_actualizar_bajo_demanda.py` por cada job, pero de una sentada
     para poder revisar en vivo que el flujo contra el sitio real sigue
     funcionando antes de dejarlo corriendo por launchd."""
     if len(sys.argv) < 7:
         print(
-            "Uso: python -m scrapers.libroazul_precio_rpa "
+            "Uso: python -m jobs_por_evento.libroazul_precio_rpa "
             "<id_unidad> <marca> <modelo> <anio> <version> <condicion> [id_usuario]"
         )
         return 1

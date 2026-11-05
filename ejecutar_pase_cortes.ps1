@@ -17,7 +17,7 @@ $LogPath = Join-Path $LogDirectory ("pase_cortes_{0}.log" -f (Get-Date -Format "
 
 try {
     $ExistingRun = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match "scrapers[\\./]pase_rpa" } |
+        Where-Object { $_.CommandLine -match "jobs_programados[\\./]pase_rpa" } |
         Select-Object -First 1
 
     if ($ExistingRun) {
@@ -34,7 +34,7 @@ try {
     # ciclo vigente (día 13 en adelante) no tenga un corte nuevo, y sale con 2 si
     # sigue pendiente. 28121 (ACP COMBUSTIBLES) se quitó: cuenta sin cierres ni
     # cruces y con tags inactivos (revisado el 2026-10-27).
-    & $PythonExe -m scrapers.pase_rpa --clientes "16072" --posiciones "1" --hasta-nuevo-corte *>> $LogPath
+    & $PythonExe -m jobs_programados.pase_rpa --clientes "16072" --posiciones "1" --hasta-nuevo-corte *>> $LogPath
     $PythonExitCode = $LASTEXITCODE
     $ErrorActionPreference = $PreviousErrorActionPreference
     exit $PythonExitCode

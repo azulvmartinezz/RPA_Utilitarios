@@ -132,7 +132,7 @@ def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=
 
     # 1. Respaldo local (OneDrive si está configurado, si no una carpeta del
     # proyecto). Es una conveniencia para revisar sin entrar a GCS -- la
-    # fuente de verdad que lee `extractors/pase_cruces.py` es la nube.
+    # fuente de verdad que lee `jobs_programados/pase_cruces.py` es la nube.
     try:
         dest_dir = os.path.join(backup_root, sistema, str(anio), f"{int(mes):02d}")
         os.makedirs(dest_dir, exist_ok=True)
@@ -143,7 +143,7 @@ def subir_y_borrar_local(archivo_local, sistema, empresa=None, year=None, month=
         print(f"❌ Error al guardar respaldo local: {e}")
 
     # 2. Subida a GCS -- esta es la que de verdad importa. Sin ella,
-    # `extractors/pase_cruces.py` nunca ve el archivo nuevo, sin importar
+    # `jobs_programados/pase_cruces.py` nunca ve el archivo nuevo, sin importar
     # cuántas veces se corra: solo lee de `gs://<bucket>/Pase/`.
     #
     # Se quitó por accidente el 2026-07-09 (migración a Flet UI): la función

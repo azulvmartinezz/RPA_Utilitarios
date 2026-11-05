@@ -39,7 +39,7 @@ RAIZ_PROYECTO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if RAIZ_PROYECTO not in sys.path:
     sys.path.insert(0, RAIZ_PROYECTO)
 
-from scrapers.libroazul_precio_rpa import PedidoCotizacion, cotizar_unidad  # noqa: E402
+from jobs_por_evento.libroazul_precio_rpa import PedidoCotizacion, cotizar_unidad  # noqa: E402
 from shared.db import conectar_postgres  # noqa: E402
 
 load_dotenv()

@@ -3,8 +3,8 @@
 Factorizado de `scrapers/supramax_rpa.py` (donde vivía como
 `_guardar_diagnostico`, sin depender de estado global del módulo -- solo del
 `driver` y strings que recibe como parámetro) para que los scripts nuevos de
-saldos y dispersión de Supramax (`scrapers/supramax_saldos_rpa.py`,
-`scrapers/supramax_dispersion_rpa.py`) no reimplementen la misma captura a
+saldos y dispersión de Supramax (`jobs_programados/supramax_saldos_rpa.py`,
+`jobs_por_evento/supramax_dispersion_rpa.py`) no reimplementen la misma captura a
 mano. `supramax_rpa.py` importa esta misma función en vez de duplicarla.
 """
 

@@ -29,7 +29,7 @@ RAIZ_PROYECTO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if RAIZ_PROYECTO not in sys.path:
     sys.path.insert(0, RAIZ_PROYECTO)
 
-from scrapers.libroazul_precio_rpa import (  # noqa: E402
+from jobs_por_evento.libroazul_precio_rpa import (  # noqa: E402
     _buscar_versiones,
     abrir_driver_desechable,
     guardar_cache_versiones,
@@ -68,9 +68,9 @@ def buscar_versiones(pedido: PedidoBusquedaVersiones) -> list[str]:
 
 
 def main() -> int:
-    """Prueba manual: `python -m scrapers.libroazul_versiones_rpa <marca> <modelo> <anio>`."""
+    """Prueba manual: `python -m jobs_por_evento.libroazul_versiones_rpa <marca> <modelo> <anio>`."""
     if len(sys.argv) < 4:
-        print("Uso: python -m scrapers.libroazul_versiones_rpa <marca> <modelo> <anio>")
+        print("Uso: python -m jobs_por_evento.libroazul_versiones_rpa <marca> <modelo> <anio>")
         return 1
 
     pedido = PedidoBusquedaVersiones(nb_marca=sys.argv[1], nb_modelo=sys.argv[2], nu_claveanio=sys.argv[3])

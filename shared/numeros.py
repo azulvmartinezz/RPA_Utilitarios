@@ -1,8 +1,8 @@
 """Conversión de los textos con formato de moneda del portal de Supramax
 (`$ 1,798.50`, `$ 0.00`) a `Decimal`.
 
-Se saca a un módulo propio porque tanto `scrapers/supramax_saldos_rpa.py`
-(para el crédito del listado) como `scrapers/supramax_dispersion_rpa.py`
+Se saca a un módulo propio porque tanto `jobs_programados/supramax_saldos_rpa.py`
+(para el crédito del listado) como `jobs_por_evento/supramax_dispersion_rpa.py`
 (para `#vehsaldo` antes/después de dispersar) necesitan la misma conversión,
 y comparar saldos con `float` arrastraría error de redondeo justo donde la
 verificación de éxito de la dispersión necesita precisión de centavos.

@@ -1,3 +1,5 @@
+> **Documento histórico.** Describe el primer RPA de reportes mensuales (Pase, Supramax y Edenred por portal). Los scrapers de Supramax y Edenred se retiraron el 2026-11-05. La estructura vigente está en [README.md](README.md) y el plan de nube en [MIGRACION_JOBS_NUBE.md](MIGRACION_JOBS_NUBE.md).
+
 # 🤖 RPA Utilitarios: Automatización de Portales Financieros
 
 ## 📖 Resumen del Proyecto

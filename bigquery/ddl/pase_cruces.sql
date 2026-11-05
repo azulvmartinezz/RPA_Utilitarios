@@ -7,7 +7,7 @@
 -- veía como dos columnas —«estación» y «ciudad»— vacías en los 44,796
 -- renglones de Pase.
 --
--- La llena `extractors/pase_cruces.py` releyendo los CSV respaldados en
+-- La llena `jobs_programados/pase_cruces.py` releyendo los CSV respaldados en
 -- `gs://innovacion-futuro-respaldos-rpa/Pase/`, con el mismo lector sin pérdida
 -- y las mismas reglas de limpieza que la carga original. Verificado: de los 71
 -- archivos que están en las dos partes, los 71 dan el mismo número de filas.
@@ -34,4 +34,4 @@ CREATE TABLE IF NOT EXISTS `innovacion-futuro.flota.pase_cruces`
 )
 PARTITION BY fecha
 CLUSTER BY eco, nb_caseta
-OPTIONS(description = 'Cruces de caseta con el detalle que el consolidado descarta. Ver extractors/pase_cruces.py.');
+OPTIONS(description = 'Cruces de caseta con el detalle que el consolidado descarta. Ver jobs_programados/pase_cruces.py.');

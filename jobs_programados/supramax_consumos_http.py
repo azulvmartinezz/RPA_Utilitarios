@@ -30,9 +30,9 @@ Las filas salen con las columnas exactas de `bq_ingestion.procesar_supramax`
 ya cargó el RPA no duplica: se comprobó cargando días que ya estaban.
 
 Uso:
-    python -m extractors.supramax_consumos_http --dias 7
-    python -m extractors.supramax_consumos_http --desde 2026-09-01 --hasta 2026-09-30
-    python -m extractors.supramax_consumos_http --dias 3 --empresa OCEÁNICA --en-seco
+    python -m jobs_programados.supramax_consumos_http --dias 7
+    python -m jobs_programados.supramax_consumos_http --desde 2026-09-01 --hasta 2026-09-30
+    python -m jobs_programados.supramax_consumos_http --dias 3 --empresa OCEÁNICA --en-seco
 """
 
 import argparse

@@ -9,8 +9,8 @@ hace falta para moverlos a GCP como un conjunto de jobs.
 > producción no tienen quién atienda sus colas.
 >
 > **Hueco detectado el 2026-11-05:** el consumo de **Ticket Car** a BigQuery
-> (`extractors/ticketcar_api.py`) y el detalle de **casetas de Pase**
-> (`extractors/pase_cruces.py`) no están programados en ningún lado. Solo
+> (`jobs_programados/ticketcar_api.py`) y el detalle de **casetas de Pase**
+> (`jobs_programados/pase_cruces.py`) no están programados en ningún lado. Solo
 > corren cuando alguien lanza `orquestador_maestro.py` a mano. Se agregan abajo
 > como jobs 13 y 14.
 >
@@ -61,10 +61,10 @@ resultado. Hoy se resuelven por polling.
 
 | # | Job | Código | Tecnología | Cola | Frecuencia hoy | Duración típica |
 |---|---|---|---|---|---|---|
-| 1 | **Dispersión Supramax** | `RPA_Utilitarios/scrapers/supramax_dispersion_rpa.py` | Python + **Selenium/Chrome** | `supramax_dispersion_jobs` | cada 90 s | ~1 min por job (login + captura + verificación) |
-| 2 | **Actualizar saldos Supramax** (botón) | `RPA_Utilitarios/scrapers/supramax_actualizar_bajo_demanda.py` → `supramax_saldos_rpa.ejecutar_actualizacion_saldos` | Python + **Selenium/Chrome** (pool en paralelo) | `supramax_refresh_jobs`, avance en `supramax_refresh_avance` | cada 60 s | ~6 min (20 cuentas) |
-| 3 | **Valuación Libro Azul** | `RPA_Utilitarios/scrapers/libroazul_actualizar_bajo_demanda.py` → `libroazul_precio_rpa.py` | Python + **undetected_chromedriver** | `libroazul_valuacion_jobs` | cada 60 s | 1–2 min |
-| 4 | **Versiones Libro Azul** | `RPA_Utilitarios/scrapers/libroazul_versiones_actualizar_bajo_demanda.py` → `libroazul_versiones_rpa.py` | Python + **undetected_chromedriver** | `libroazul_versiones_jobs` | **cada 5 s** | < 1 min |
+| 1 | **Dispersión Supramax** | `RPA_Utilitarios/jobs_por_evento/supramax_dispersion_rpa.py` | Python + **Selenium/Chrome** | `supramax_dispersion_jobs` | cada 90 s | ~1 min por job (login + captura + verificación) |
+| 2 | **Actualizar saldos Supramax** (botón) | `RPA_Utilitarios/jobs_por_evento/supramax_actualizar_bajo_demanda.py` → `supramax_saldos_rpa.ejecutar_actualizacion_saldos` | Python + **Selenium/Chrome** (pool en paralelo) | `supramax_refresh_jobs`, avance en `supramax_refresh_avance` | cada 60 s | ~6 min (20 cuentas) |
+| 3 | **Valuación Libro Azul** | `RPA_Utilitarios/jobs_por_evento/libroazul_actualizar_bajo_demanda.py` → `libroazul_precio_rpa.py` | Python + **undetected_chromedriver** | `libroazul_valuacion_jobs` | cada 60 s | 1–2 min |
+| 4 | **Versiones Libro Azul** | `RPA_Utilitarios/jobs_por_evento/libroazul_versiones_actualizar_bajo_demanda.py` → `libroazul_versiones_rpa.py` | Python + **undetected_chromedriver** | `libroazul_versiones_jobs` | **cada 5 s** | < 1 min |
 
 **Dónde se encolan, en el backend (`control-vehicular`):**
 - Supramax: `src/modules/solicitud/services/supramax.service.ts`
@@ -78,16 +78,16 @@ resultado. Hoy se resuelven por polling.
 
 | # | Job | Código | Tecnología | Escribe en | Frecuencia hoy | Duración típica |
 |---|---|---|---|---|---|---|
-| 5 | **Saldos Supramax** | `RPA_Utilitarios/scrapers/supramax_saldos_rpa.py` | Python + **Selenium/Chrome** (pool) | `supramax_saldos`, `tarjetas`, `colaboradores_tarjetas` | cada 30 min | ~6 min |
-| 6 | **Ingesta de viajes FleetUp** | `RPA_Utilitarios/extractors/fleetup_viajes.py --dias 7` | Python + `requests` (API) | BigQuery `innovacion-futuro.flota.viajes` (MERGE) | diario 3:00 | 10–15 min (294 dispositivos, pausa de 0.5 s) |
+| 5 | **Saldos Supramax** | `RPA_Utilitarios/jobs_programados/supramax_saldos_rpa.py` | Python + **Selenium/Chrome** (pool) | `supramax_saldos`, `tarjetas`, `colaboradores_tarjetas` | cada 30 min | ~6 min |
+| 6 | **Ingesta de viajes FleetUp** | `RPA_Utilitarios/jobs_programados/fleetup_viajes.py --dias 7` | Python + `requests` (API) | BigQuery `innovacion-futuro.flota.viajes` (MERGE) | diario 3:00 | 10–15 min (294 dispositivos, pausa de 0.5 s) |
 | 7 | **Espejo de requisiciones SIPP** | `control-vehicular/src/database/sincronizar-requisiciones-sipp.ts --ambiente=produccion` | Node/Nest (API de SIPP) + desglose con Vertex AI | `sipp_requisiciones`, `sipp_ordenes_insumos`, `requisiciones_desglose*` | cada hora | variable (bloques de 40 min) |
 | 8 | **Espejo SIPP semanal** | el mismo script con `--desde=2025-01-01 --sin-ordenes` | Node/Nest | `sipp_requisiciones` | domingo 3:00 | ~11 min |
 | 9 | **Odómetros FleetUp** | `control-vehicular/src/database/sincronizar-odometros-fleetup.ts` | Node/Nest (API) | `unidades.nu_odometro` | cada hora | < 1 min |
-| 10 | **Consumos Supramax** *(servidor Windows)* | `RPA_Utilitarios/extractors/supramax_consumos_http.py --dias 10`, lanzado por `ejecutar_supramax_incremental.ps1` | Python + `requests` (sin Chrome) | BigQuery `rpa_utilitarios.consumos_flota` (MERGE) | nocturno | minutos |
-| 11 | **Cortes de peaje (Pase)** *(servidor Windows)* | `RPA_Utilitarios/scrapers/pase_rpa.py --clientes 16072 --posiciones 1 --hasta-nuevo-corte`, lanzado por `ejecutar_pase_cortes.ps1` | Python + **Selenium/Chrome** | BigQuery `flota.pase_cruces` | por corte | minutos |
+| 10 | **Consumos Supramax** *(servidor Windows)* | `RPA_Utilitarios/jobs_programados/supramax_consumos_http.py --dias 10`, lanzado por `ejecutar_supramax_incremental.ps1` | Python + `requests` (sin Chrome) | BigQuery `rpa_utilitarios.consumos_flota` (MERGE) | nocturno | minutos |
+| 11 | **Cortes de peaje (Pase)** *(servidor Windows)* | `RPA_Utilitarios/jobs_programados/pase_rpa.py --clientes 16072 --posiciones 1 --hasta-nuevo-corte`, lanzado por `ejecutar_pase_cortes.ps1` | Python + **Selenium/Chrome** | BigQuery `flota.pase_cruces` | por corte | minutos |
 | 12 | **Resumen de preventivos** *(nuevo, aún sin instalar)* | `control-vehicular/src/database/resumen-preventivos.ts` (`pnpm preventivos:resumen`) | Node/Nest (MailGun + Web Push) | correo y push, solo lectura en la base | lunes 8:00 | < 1 min |
-| 13 | **Consumo Ticket Car** *(hoy solo a mano)* | `RPA_Utilitarios/extractors/ticketcar_api.py` (`main_dias(7)`, desde el orquestador) | Python + SOAP de Edenred (sin Chrome) | BigQuery `flota.ticketcar_transacciones` | **ninguna** | minutos |
-| 14 | **Detalle de casetas Pase** *(hoy solo a mano)* | `RPA_Utilitarios/extractors/pase_cruces.py` (después de `pase_rpa`, en el orquestador) | Python: lee los CSV de GCS | BigQuery `flota.pase_cruces` (WRITE_TRUNCATE) | **ninguna** | minutos |
+| 13 | **Consumo Ticket Car** *(hoy solo a mano)* | `RPA_Utilitarios/jobs_programados/ticketcar_api.py` (`main_dias(7)`, desde el orquestador) | Python + SOAP de Edenred (sin Chrome) | BigQuery `flota.ticketcar_transacciones` | **ninguna** | minutos |
+| 14 | **Detalle de casetas Pase** *(hoy solo a mano)* | `RPA_Utilitarios/jobs_programados/pase_cruces.py` (después de `pase_rpa`, en el orquestador) | Python: lee los CSV de GCS | BigQuery `flota.pase_cruces` (WRITE_TRUNCATE) | **ninguna** | minutos |
 
 Los plists de los agentes de la Mac están en `~/Library/LaunchAgents/mx.petroil.controlvehicular.*.plist`. Los versionados:
 - `control-vehicular/db/utilidades/`: odómetros, SIPP horario y semanal, resumen de preventivos;
@@ -141,16 +141,16 @@ Jobs**, con dos imágenes:
 
 | Job | Comando del contenedor | Cloud Scheduler | Notas |
 |---|---|---|---|
-| 5 Saldos Supramax | `python -m scrapers.supramax_saldos_rpa` | `*/30 * * * *` | Chrome headless (`shared/pool_navegadores.py`). 2 GiB de memoria por el pool |
-| 6 Viajes FleetUp | `python -m extractors.fleetup_viajes --dias 7` | `0 3 * * *` (America/Mazatlan) | FleetUp responde 429 si dos corridas coinciden: un solo job para todos los ambientes, porque BigQuery es compartido |
+| 5 Saldos Supramax | `python -m jobs_programados.supramax_saldos_rpa` | `*/30 * * * *` | Chrome headless (`shared/pool_navegadores.py`). 2 GiB de memoria por el pool |
+| 6 Viajes FleetUp | `python -m jobs_programados.fleetup_viajes --dias 7` | `0 3 * * *` (America/Mazatlan) | FleetUp responde 429 si dos corridas coinciden: un solo job para todos los ambientes, porque BigQuery es compartido |
 | 7 SIPP horario | `node dist/database/sincronizar-requisiciones-sipp.js --ambiente=produccion` | `0 * * * *` | Necesita `SIPP_PRODUCCION_*` en el secreto |
 | 8 SIPP semanal | mismo, con `--desde=2025-01-01 --sin-ordenes` | `0 3 * * 0` | No encimarlo con el horario |
 | 9 Odómetros | `node dist/database/sincronizar-odometros-fleetup.js` | `0 * * * *` | |
-| 10 Consumos Supramax | `python -m extractors.supramax_consumos_http --dias 10` | nocturno | Sin Chrome. Sale con 1 si fallan todas las cuentas |
-| 11 Pase | `python -m scrapers.pase_rpa --clientes 16072 --posiciones 1 --hasta-nuevo-corte` | según cortes | Chrome |
+| 10 Consumos Supramax | `python -m jobs_programados.supramax_consumos_http --dias 10` | nocturno | Sin Chrome. Sale con 1 si fallan todas las cuentas |
+| 11 Pase | `python -m jobs_programados.pase_rpa --clientes 16072 --posiciones 1 --hasta-nuevo-corte` | según cortes | Chrome |
 | 12 Resumen preventivos | `node dist/database/resumen-preventivos.js` | `0 8 * * 1` | Solo producción: manda correos y push reales |
-| 13 Consumo Ticket Car | `python -m extractors.ticketcar_api --dias 7` | `30 3 * * *` | Edenred exige la IP de salida registrada: debe salir por la misma IP fija que el backend (`TICKETCAR_IP`) |
-| 14 Casetas Pase | `python -m extractors.pase_cruces` | después del 11 | Idempotente (relee todo GCS). Encadenarlo al 11, o programarlo una hora después |
+| 13 Consumo Ticket Car | `python -m jobs_programados.ticketcar_api --dias 7` | `30 3 * * *` | Edenred exige la IP de salida registrada: debe salir por la misma IP fija que el backend (`TICKETCAR_IP`) |
+| 14 Casetas Pase | `python -m jobs_programados.pase_cruces` | después del 11 | Idempotente (relee todo GCS). Encadenarlo al 11, o programarlo una hora después |
 
 **BigQuery es compartido por todos los ambientes** (jobs 6, 10, 11, 13 y 14). Deben
 correr **una sola vez**, no uno por ambiente.
@@ -251,70 +251,65 @@ real y cada formulario del portal habría que probarlo a mano primero.
 **Libro Azul (3 y 4) no tiene esa salida:** el muro anti-bot obliga a usar
 Chrome.
 
-### 7.2 `RPA_Utilitarios/scrapers/`
+### 7.2 Estructura del repo (reorganizado el 2026-11-05)
 
-| Archivo | Destino | Job | Notas |
-|---|---|---|---|
-| `supramax_dispersion_rpa.py` | **Job por evento** | 1 | Dinero real. Solo prod (y dev mientras se prueba) |
-| `supramax_actualizar_bajo_demanda.py` | **Job por evento** | 2 | Llama a `supramax_saldos_rpa.ejecutar_actualizacion_saldos` con avance |
-| `libroazul_actualizar_bajo_demanda.py` | **Job por evento** | 3 | Usa `libroazul_precio_rpa.py` |
-| `libroazul_versiones_actualizar_bajo_demanda.py` | **Job por evento** | 4 | Usa `libroazul_versiones_rpa.py` |
-| `supramax_saldos_rpa.py` | **Job programado** | 5 | También es librería del job 2 |
-| `pase_rpa.py` | **Job programado** | 11 | Hoy en Windows |
-| `libroazul_precio_rpa.py` | Soporte | 3 | Lo invoca el job 3; también se puede correr solo |
-| `libroazul_versiones_rpa.py` | Soporte | 4 | Lo invoca el job 4 |
-| `supramax_reconocer_tags.py` | Manual | — | Homologa tags contra el portal. Primero en lectura, después `--aplicar` |
-| `edenred_rpa.py` | Retirado | — | Portal viejo de Edenred (2026-08-20) |
-| `ticketcar_rpa.py` | Retirado | — | Lo reemplazó `extractors/ticketcar_api.py` (2026-08-20) |
-| `supramax_rpa.py` | Retirado | — | Lo reemplazó `extractors/supramax_consumos_http.py` |
-| `fleetup_rpa.py` | Retirado | — | Lo reemplazó `extractors/fleetup_viajes.py` |
+Los scripts ya están separados por destino. Para la migración se comparten las
+dos primeras carpetas más `shared/` y `bigquery/`.
 
-### 7.3 `RPA_Utilitarios/extractors/`
+**`jobs_programados/`**: Cloud Run Job + Cloud Scheduler.
 
-| Archivo | Destino | Job | Notas |
-|---|---|---|---|
-| `fleetup_viajes.py` | **Job programado** | 6 | Un solo job para todos los ambientes |
-| `supramax_consumos_http.py` | **Job programado** | 10 | Hoy en Windows |
-| `ticketcar_api.py` | **Job programado** | 13 | **Hoy no corre solo.** Necesita la IP registrada con Edenred |
-| `pase_cruces.py` | **Job programado** | 14 | **Hoy no corre solo.** Va después del 11 |
-| `edenred_extractor.py` | Retirado | — | Bajaba el reporte por correo (O365) y pedía ENTER en la terminal |
-
-### 7.4 `RPA_Utilitarios/shared/`, `bigquery/` y raíz
-
-| Archivo | Destino | Lo usan |
+| Archivo | Job | Notas |
 |---|---|---|
-| `shared/db.py` | Soporte | Todos los jobs que tocan Postgres |
-| `shared/credenciales.py` | Soporte | 1, 5, 10 (credenciales cifradas de Supramax) |
-| `shared/supramax_login.py` | Soporte | 1, 2, 5 |
-| `shared/pool_navegadores.py`, `shared/navegador.py` | Soporte | 1, 2, 3, 5, 11 |
-| `shared/diagnostico.py`, `shared/numeros.py` | Soporte | 1, 3, 5 |
-| `bigquery/bq_ingestion.py`, `pase_utils.py`, `gcs_uploader.py` | Soporte | 10, 11, 14 |
-| `bigquery/ddl/*.sql`, `bigquery/setup_bigquery.py`, `bigquery/seed_casetas_ubicacion.py` | Manual | Crear tablas y catálogos de BigQuery una vez |
-| `shared/auth_service.py`, `config_service.py`, `consolidation_service.py`, `date_ranges.py`, `ingest_capture.py`, `pipeline_runner.py` | Solo escritorio | Los usan `ui_flet/` y `ejecutable/`; no van en la imagen de jobs |
-| `shared/logging_redirect.py` | Retirado | Nadie lo importa |
-| `orquestador_maestro.py` | Manual | Corre en serie 11 + 14, 10, 6 y 13. En la nube lo reemplazan los jobs sueltos |
-| `ui_flet/`, `ejecutable/app.py`, `RPA_Utilitarios_Ejecutable/app.exe`, `compilar_mac.sh`, `compilar_windows.bat` | Escritorio | Herramienta para correr a mano; no se migra |
-| `html_Selector_Informes_Fleetup.html` | Retirado | Apoyo del scraper de FleetUp |
+| `supramax_saldos_rpa.py` | 5 | Chrome. También es librería del job 2 |
+| `fleetup_viajes.py` | 6 | Un solo job para todos los ambientes |
+| `supramax_consumos_http.py` | 10 | Sin Chrome. Hoy en Windows |
+| `pase_rpa.py` | 11 | Chrome + 2captcha. Hoy en Windows |
+| `ticketcar_api.py` | 13 | **Hoy no corre solo.** Necesita la IP registrada con Edenred |
+| `pase_cruces.py` | 14 | **Hoy no corre solo.** Va después del 11 |
 
-### 7.5 Envolturas de programación (sobran en la nube)
+**`jobs_por_evento/`**: Cloud Run Job que el backend dispara al encolar.
 
-| Archivo | Qué hace hoy | Reemplazo |
+| Archivo | Job | Notas |
 |---|---|---|
-| `dispersion_supramax_polling.sh`, `supramax_actualizar_bajo_demanda.sh`, `saldos_supramax_cada_30min.sh`, `ingesta_viajes_diaria.sh` | Envolturas viejas; launchd ya llama al `python` del `.venv` directo (con `/bin/bash` daba exit 126) | Ninguno: borrar al migrar |
-| `ejecutar_supramax_incremental.ps1`, `ejecutar_pase_cortes.ps1` | Programador de tareas de Windows, con candado contra corridas dobles | Cloud Scheduler + `--parallelism=1` |
-| `launchd/*.plist`, `~/Library/LaunchAgents/mx.petroil.controlvehicular.*.plist`, `control-vehicular/db/utilidades/*.plist` | Agentes de la Mac | Cloud Scheduler; `launchctl bootout` al apagar cada uno |
+| `supramax_dispersion_rpa.py` | 1 | Dinero real. Solo prod (y dev mientras se prueba) |
+| `supramax_actualizar_bajo_demanda.py` | 2 | Usa `jobs_programados.supramax_saldos_rpa` con avance |
+| `libroazul_actualizar_bajo_demanda.py` | 3 | Usa `libroazul_precio_rpa.py` (misma carpeta) |
+| `libroazul_versiones_actualizar_bajo_demanda.py` | 4 | Usa `libroazul_versiones_rpa.py` (misma carpeta) |
+| `libroazul_precio_rpa.py`, `libroazul_versiones_rpa.py` | 3, 4 | Soporte; también se pueden correr solos |
 
-### 7.6 `RPA_Utilitarios/scripts/`, `scripts_onedrive/` y `scratch/`: todos manuales
+**Soporte (va en la imagen, no es job):**
 
-Cargas históricas y arreglos de una vez. Ninguno se programa ni va en la imagen:
-`backfill_historico.py`, `recuperar_edenred_2025.py`, `recuperar_pase_2025.py`,
-`deduplicar_bigquery.py`, `conciliacion_ecos_2025_vs_2026.py`,
-`conciliar_contra_manual.py`, `reporte_tarjetas_por_eco.py`,
-`consolidar_utilitarios.py`, `unificar_respaldos.py`, `migrar_respaldos_a_gcs.py`,
-`auth_o365.py` y `consentir_o365.py` (del flujo retirado de correo de Edenred),
-`scripts_onedrive/*` y `scratch/*`.
+| Archivo | Lo usan |
+|---|---|
+| `shared/db.py` | Todos los que tocan Postgres |
+| `shared/credenciales.py` | 1, 5, 10 (credenciales cifradas de Supramax) |
+| `shared/supramax_login.py` | 1, 2, 5 |
+| `shared/pool_navegadores.py`, `shared/navegador.py` | 1, 2, 3, 5, 11 |
+| `shared/diagnostico.py`, `shared/numeros.py` | 1, 3, 5 |
+| `bigquery/bq_ingestion.py`, `pase_utils.py`, `gcs_uploader.py` | 10, 11, 14 |
 
-### 7.7 `control-vehicular/src/database/` (Node)
+**Manual (no se programa, no va en la imagen):**
+- `orquestador_maestro.py`: corre en serie 11 + 14, 10, 6 y 13. En la nube lo reemplazan los jobs sueltos.
+- `scripts/`: cargas históricas, conciliaciones y `supramax_reconocer_tags.py` (homologa tags; primero en lectura, después `--aplicar`).
+- `scripts_onedrive/`, `scratch/`.
+- `bigquery/ddl/*.sql`, `bigquery/setup_bigquery.py`, `bigquery/seed_casetas_ubicacion.py`: se crean una vez.
+
+**Envolturas que sobran en la nube:**
+- `ejecutar_supramax_incremental.ps1` y `ejecutar_pase_cortes.ps1`: Programador de tareas de Windows. Al hacer `git pull` en el servidor ya traen las rutas nuevas.
+- `launchd/*.plist`, `~/Library/LaunchAgents/mx.petroil.controlvehicular.*.plist` y `control-vehicular/db/utilidades/*.plist`: los agentes de la Mac. Ya apuntan a las rutas nuevas.
+
+### 7.3 Lo que se borró el 2026-11-05
+
+Queda en el historial de git (commit «refactor: separar jobs programados y por evento»):
+- `scrapers/edenred_rpa.py`, `scrapers/ticketcar_rpa.py`, `extractors/edenred_extractor.py`, `scripts/auth_o365.py`, `scripts/consentir_o365.py`: Edenred por portal y por correo. Lo reemplazó `ticketcar_api.py`.
+- `scrapers/supramax_rpa.py`: consumos con Chrome. Lo reemplazó `supramax_consumos_http.py`. Sus tres funciones de login pasaron a `shared/supramax_login.py`.
+- `scrapers/fleetup_rpa.py` y `html_Selector_Informes_Fleetup.html`. Lo reemplazó `fleetup_viajes.py`.
+- La app de escritorio: `ui_flet/`, `ejecutable/`, `RPA_Utilitarios_Ejecutable/app.exe`, `compilar_mac.sh`, `compilar_windows.bat`, `MIGRACION_FLET.md` y sus servicios en `shared/` (`auth_service`, `config_service`, `consolidation_service`, `date_ranges`, `ingest_capture`, `pipeline_runner`, `logging_redirect`). Solo corría los flujos retirados.
+- `scripts/backfill_historico.py`: recargaba meses con los scrapers retirados.
+- Las cuatro envolturas `.sh`: launchd ya llama al `python` del `.venv` directo.
+- Del `requirements.txt`: `flet`, `customtkinter`, `O365` y `msal`.
+
+### 7.4 `control-vehicular/src/database/` (Node)
 
 | Archivo | Destino | Job | Notas |
 |---|---|---|---|
@@ -330,16 +325,16 @@ Cargas históricas y arreglos de una vez. Ninguno se programa ni va en la imagen
 | `analisis-tablas.ts`, `analisis-precios.ts`, `atipicos-mantenimientos.ts` | Manual | — | Reportes de análisis |
 | `db/utilidades/sincronizar_mantenimientos_excel.py` | Manual | — | Carga desde Excel |
 
-### 7.8 Fuera de los dos repos
+### 7.5 Fuera de los dos repos
 
 - `Control_Vehicular/monitor_red/` (`monitor_red.sh`, `resumen.sh`): mide el internet de la oficina. Tiene que correr **en la oficina**; no se migra.
 - `Control_Vehicular/policy-ocr-hybrid/`: servidor Flask de OCR de pólizas. Es un servicio, no un job. Si se sigue usando, iría a Cloud Run como servicio, aparte de esta migración.
 
-### 7.9 Resumen
+### 7.6 Resumen
 
 | Destino | Cuántos | Cuáles |
 |---|---|---|
 | Cloud Run Job + Scheduler | 10 | 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 (el 7 y el 8 son el mismo script) |
 | Cloud Run Job disparado por el backend | 4 | 1, 2, 3, 4 (después, opcional: 1, 2 y 5 reescritos por HTTP dentro del backend) |
-| Retirados, para borrar | 9 | 4 scrapers, `edenred_extractor.py`, `logging_redirect.py`, `html_Selector_Informes_Fleetup.html`, `auth_o365.py`, `consentir_o365.py` |
-| Envolturas que sobran | 6 + plists | 4 `.sh`, 2 `.ps1` |
+| Borrados el 2026-11-05 | 29 archivos | 6 scrapers y extractores retirados, la app de escritorio y sus 7 servicios, 4 `.sh` y otros |
+| Envolturas que sobran al migrar | 2 + plists | 2 `.ps1` y los agentes de launchd |
