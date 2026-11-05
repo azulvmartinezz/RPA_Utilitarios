@@ -55,4 +55,15 @@ def conectar_postgres(cfg: dict | None = None):
         user=cfg["DB_USERNAME"],
         password=cfg["DB_PASSWORD"],
         dbname=cfg["DB_DATABASE"],
+        # Sin esto, si la red se cae a media consulta el socket queda
+        # "ESTABLISHED" para siempre y el proceso se cuelga esperando la
+        # respuesta (pasó el 2026-11-05: la dispersión de Supramax quedó 8 h
+        # trabada en un commit, y launchd no arranca otra corrida mientras la
+        # anterior siga viva). Con keepalives la conexión muerta se detecta en
+        # ~1 min y la corrida truena; la siguiente pasada vuelve a conectar.
+        connect_timeout=15,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
     )
