@@ -36,9 +36,9 @@ es indistinguible de «no hubo consumo». Por eso el backfill arranca en esa
 fecha y no antes.
 
 Uso:
-    python -m extractors.ticketcar_api --dias 7
-    python -m extractors.ticketcar_api --desde 2026-06-21 --hasta 2026-08-20
-    python -m extractors.ticketcar_api --catalogos      # solo tarjetas y vehículos
+    python -m jobs_programados.ticketcar_api --dias 7
+    python -m jobs_programados.ticketcar_api --desde 2026-06-21 --hasta 2026-08-20
+    python -m jobs_programados.ticketcar_api --catalogos      # solo tarjetas y vehículos
 """
 
 import argparse

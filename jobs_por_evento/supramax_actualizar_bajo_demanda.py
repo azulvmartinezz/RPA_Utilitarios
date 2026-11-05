@@ -56,7 +56,7 @@ RAIZ_PROYECTO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if RAIZ_PROYECTO not in sys.path:
     sys.path.insert(0, RAIZ_PROYECTO)
 
-from scrapers.supramax_saldos_rpa import ejecutar_actualizacion_saldos  # noqa: E402
+from jobs_programados.supramax_saldos_rpa import ejecutar_actualizacion_saldos  # noqa: E402
 from shared.db import conectar_postgres  # noqa: E402
 
 load_dotenv()

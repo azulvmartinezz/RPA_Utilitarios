@@ -17,7 +17,7 @@ $LogPath = Join-Path $LogDirectory ("supramax_incremental_{0}.log" -f (Get-Date 
 
 try {
     $ExistingRun = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match "extractors[\\./]supramax_consumos_http" } |
+        Where-Object { $_.CommandLine -match "jobs_programados[\\./]supramax_consumos_http" } |
         Select-Object -First 1
 
     if ($ExistingRun) {
@@ -33,7 +33,7 @@ try {
     # Consumo por HTTP, sin Chrome, igual que flujo_supramax del orquestador:
     # los últimos 10 días, así una noche perdida se recupera en la siguiente.
     # Sale con 1 si fallan todas las cuentas (p. ej. contraseñas rotadas).
-    & $PythonExe -m extractors.supramax_consumos_http --dias 10 *>> $LogPath
+    & $PythonExe -m jobs_programados.supramax_consumos_http --dias 10 *>> $LogPath
     $PythonExitCode = $LASTEXITCODE
     $ErrorActionPreference = $PreviousErrorActionPreference
     exit $PythonExitCode

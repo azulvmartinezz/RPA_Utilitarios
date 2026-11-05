@@ -4,8 +4,8 @@ import sys
 import os
 import datetime
 import atexit
-from scrapers import pase_rpa
-from extractors import fleetup_viajes, pase_cruces, supramax_consumos_http, ticketcar_api
+from jobs_programados import pase_rpa
+from jobs_programados import fleetup_viajes, pase_cruces, supramax_consumos_http, ticketcar_api
 
 class _Tee:
     def __init__(self, *streams):

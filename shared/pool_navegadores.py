@@ -5,8 +5,8 @@ POR QUÉ EXISTE
 `scrapers/supramax_rpa.py` procesa las cuentas de `SUPRAMAX_CREDENTIALS` una
 por una, con un solo `webdriver` reutilizado entre ellas -- eso está bien
 para el reporte mensual de consumos, que ya corre de madrugada sin prisa. Los
-dos scripts nuevos (`scrapers/supramax_saldos_rpa.py`,
-`scrapers/supramax_dispersion_rpa.py`) sí necesitan varias cuentas al mismo
+dos scripts nuevos (`jobs_programados/supramax_saldos_rpa.py`,
+`jobs_por_evento/supramax_dispersion_rpa.py`) sí necesitan varias cuentas al mismo
 tiempo: los saldos deben refrescarse cada 30 min sin que la cuenta 9 espere a
 que terminen las 8 anteriores, y la dispersión debe drenar la cola rápido.
 Selenium no permite compartir un `webdriver` entre threads, así que cada

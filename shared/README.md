@@ -1,13 +1,12 @@
-# Shared
+# shared
 
-Esta carpeta es para la logica reutilizable entre la UI actual y la futura UI en Flet.
+Código común de los jobs. No se corre solo.
 
-Primeras piezas a mover desde `ejecutable/app.py`:
-
-- Calculo de rangos de fechas.
-- Ejecucion de flujos seleccionados.
-- Generacion de reporte consolidado.
-- Autenticacion O365.
-- Consolidacion final desde OneDrive.
-
-Regla practica: aqui solo entra logica sin widgets, sin `messagebox`, sin `CTk*` y sin dependencias visuales.
+| Módulo | Para qué | Lo usan |
+|---|---|---|
+| `db.py` | Conexión a Postgres desde el secreto del ambiente (con keepalives) | Todos los que tocan la base |
+| `credenciales.py` | Descifra las credenciales de proveedores de la base | Supramax (saldos, dispersión, consumos) |
+| `supramax_login.py` | Login del portal de Supramax con Selenium | Saldos y dispersión |
+| `pool_navegadores.py`, `navegador.py` | Pool de Chrome headless y localización del binario | Supramax, Libro Azul, Pase |
+| `diagnostico.py` | Guarda HTML + PNG cuando un portal falla | Supramax |
+| `numeros.py` | Lectura de importes del portal | Supramax, Libro Azul |

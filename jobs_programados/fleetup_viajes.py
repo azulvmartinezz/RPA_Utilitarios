@@ -14,9 +14,9 @@ Unidades del API, verificadas contra el swagger y midiendo desplazamiento real:
     rechaza rangos mayores a 30 días: con 31 devuelve 400.
 
 Uso:
-    python -m extractors.fleetup_viajes --dias 7
-    python -m extractors.fleetup_viajes --desde 2026-06-01 --hasta 2026-06-30
-    python -m extractors.fleetup_viajes --dias 7 --limite 3   # prueba corta
+    python -m jobs_programados.fleetup_viajes --dias 7
+    python -m jobs_programados.fleetup_viajes --desde 2026-06-01 --hasta 2026-06-30
+    python -m jobs_programados.fleetup_viajes --dias 7 --limite 3   # prueba corta
 """
 
 import argparse

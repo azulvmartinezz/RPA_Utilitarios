@@ -551,7 +551,7 @@ def ejecutar_actualizacion_saldos(avance=None) -> dict:
     Se extrae para que dos disparadores distintos lo reusen sin duplicar la
     lógica de scraping: el cron de 30 minutos (`saldos_supramax_cada_30min.sh`,
     vía `main()` más abajo) y el disparador bajo demanda del botón
-    "Actualizar Supramax" (`scrapers/supramax_actualizar_bajo_demanda.py`,
+    "Actualizar Supramax" (`jobs_por_evento/supramax_actualizar_bajo_demanda.py`,
     que importa y llama esta función directo).
 
     Lanza `RuntimeError` únicamente cuando la configuración impide correr la

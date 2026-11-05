@@ -45,7 +45,7 @@ import sys
 
 from dotenv import load_dotenv
 
-from scrapers.supramax_saldos_rpa import (
+from jobs_programados.supramax_saldos_rpa import (
     TIPOS_TARJETA_SUPRAMAX,
     _asegurar_tarjeta_prestacion,
     _es_prestacion,

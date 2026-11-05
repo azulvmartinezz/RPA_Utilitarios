@@ -4,7 +4,7 @@ real en el portal de Supramax con un navegador.
 
 DISEÑADO PARA CORRER COMO PROCESO CORTO, DISPARADO POR POLLING
 
-Igual que `scrapers/supramax_saldos_rpa.py`: este script hace UNA pasada
+Igual que `jobs_programados/supramax_saldos_rpa.py`: este script hace UNA pasada
 -- recupera huérfanos, toma un lote de jobs `PENDIENTE`, los dispersa, deja
 constancia -- y termina. El intervalo corto (1-2 min) lo pone quien lo
 invoca (`dispersion_supramax_polling.sh` hoy; un Cloud Run Job con Cloud

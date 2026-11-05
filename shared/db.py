@@ -1,10 +1,10 @@
 """Conexión a Postgres para los scripts RPA que hablan con Control Vehicular.
 
-Extraído de `extractors/fleetup_viajes.py`: ese módulo ya resolvía las
+Extraído de `jobs_programados/fleetup_viajes.py`: ese módulo ya resolvía las
 credenciales de la base desde el mismo secreto de Secret Manager que usa el
 backend NestJS (`SECRETO_CONTROL_VEHICULAR`), pero la conexión vivía inline
 dentro de `refrescar_dispositivos()`. Los scripts de Supramax
-(`scrapers/supramax_saldos_rpa.py`, `scrapers/supramax_dispersion_rpa.py`)
+(`jobs_programados/supramax_saldos_rpa.py`, `jobs_por_evento/supramax_dispersion_rpa.py`)
 necesitan la misma conexión sin duplicar la lectura del secreto, así que se
 saca aquí para que ambos (y cualquier extractor futuro) la compartan.
 
@@ -21,7 +21,7 @@ import os
 import psycopg2
 from google.cloud import secretmanager
 
-# Mismo default que usa `extractors/fleetup_viajes.py`: si algún día se corre
+# Mismo default que usa `jobs_programados/fleetup_viajes.py`: si algún día se corre
 # desde Cloud Run con otro proyecto, esto se sobreescribe por variable de
 # entorno sin tocar código.
 SECRETO_CONTROL_VEHICULAR = os.getenv(
@@ -55,4 +55,15 @@ def conectar_postgres(cfg: dict | None = None):
         user=cfg["DB_USERNAME"],
         password=cfg["DB_PASSWORD"],
         dbname=cfg["DB_DATABASE"],
+        # Sin esto, si la red se cae a media consulta el socket queda
+        # "ESTABLISHED" para siempre y el proceso se cuelga esperando la
+        # respuesta (pasó el 2026-11-05: la dispersión de Supramax quedó 8 h
+        # trabada en un commit, y launchd no arranca otra corrida mientras la
+        # anterior siga viva). Con keepalives la conexión muerta se detecta en
+        # ~1 min y la corrida truena; la siguiente pasada vuelve a conectar.
+        connect_timeout=15,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
     )
