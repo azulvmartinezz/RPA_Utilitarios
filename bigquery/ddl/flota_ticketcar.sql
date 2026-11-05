@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS `innovacion-futuro.flota.ticketcar_transacciones`
   nb_region          STRING    OPTIONS(description="RegionDescription."),
   sn_facturada       BOOL      OPTIONS(description="IsInvoiced. Distingue lo ya facturado de lo pendiente, que el reporte del portal no permitía ver."),
   nu_factura         STRING    OPTIONS(description="InvoiceReference cuando existe."),
+  fh_factura         DATE      OPTIONS(description="InvoiceDate. Vacío mientras no se factura (la API manda 0001-01-01)."),
 
   fh_ingesta         TIMESTAMP NOT NULL OPTIONS(description="Cuándo se trajo el renglón. Sirve para saber si una corrida quedó a medias.")
 )

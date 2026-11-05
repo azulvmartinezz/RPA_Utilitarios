@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>mx.petroil.controlvehicular.consumo-ticketcar</string>
+
+	<!--
+		Consumo de Ticket Car a BigQuery (job 13 de MIGRACION_JOBS_NUBE.md).
+		Repasa desde el día 1 del mes anterior: lo que se cargó antes de
+		facturarse llega con IVA, IEPS y factura vacíos, y Edenred factura el
+		mes el día 1 del siguiente. El MERGE por identificador no duplica.
+		Edenred exige la IP de salida registrada: corre desde la oficina.
+	-->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios/.venv/bin/python</string>
+		<string>-m</string>
+		<string>jobs_programados.ticketcar_api</string>
+		<string>--desde-mes-anterior</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios</string>
+
+	<key>StandardOutPath</key>
+	<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios/logs_orquestador/launchd_consumo_ticketcar.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/anibalfuentes/Documents/VSC/Control_Vehicular/RPA_Utilitarios/logs_orquestador/launchd_consumo_ticketcar.log</string>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<!-- 3:30 a. m., después de los viajes de FleetUp; si la Mac dormía, al despertar. -->
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>3</integer>
+		<key>Minute</key>
+		<integer>30</integer>
+	</dict>
+</dict>
+</plist>

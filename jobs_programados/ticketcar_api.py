@@ -214,9 +214,23 @@ def _paginacion(pagina: int) -> str:
     )
 
 
-def transacciones(cuenta: dict, ip: str, desde: dt.date, hasta: dt.date) -> list:
-    """Todas las transacciones del rango, paginando hasta que una página venga corta."""
+class ErrorEdenred(Exception):
+    """La API contestó `Success=false`. Antes se tomaba como «0 transacciones»."""
+
+
+def _errores(raiz) -> list:
+    """Mensajes de `ErrorList` si `Success` es false; lista vacía si salió bien.
+    Se busca por nombre local: el `ErrorDTO` viene en el espacio de Vehicles."""
+    exito = next((e.text for e in raiz.iter() if e.tag.endswith("}Success")), "true")
+    if exito == "true":
+        return []
+    return [e.text or "" for e in raiz.iter() if e.tag.endswith("}Message")] or ["sin detalle"]
+
+
+def _rango(cuenta: dict, ip: str, inicio: dt.datetime, fin: dt.datetime) -> list:
+    """Todas las transacciones de [inicio, fin], paginando hasta una página corta."""
     salida, pagina = [], 1
+    a, b = inicio.isoformat(timespec="seconds"), fin.isoformat(timespec="seconds")
 
     while True:
         cuerpo = (
@@ -224,12 +238,12 @@ def transacciones(cuenta: dict, ip: str, desde: dt.date, hasta: dt.date) -> list
             f'<request xmlns:r="{NS["req_trx"]}" xmlns:t="{NS["trx"]}" '
             f'xmlns:c="{NS["com"]}">'
             "<r:Item>"
-            f"<t:TransactionDateTimeEnd>{hasta}T23:59:59</t:TransactionDateTimeEnd>"
-            f"<t:TransactionDateTimeStart>{desde}T00:00:00</t:TransactionDateTimeStart>"
+            f"<t:TransactionDateTimeEnd>{b}</t:TransactionDateTimeEnd>"
+            f"<t:TransactionDateTimeStart>{a}</t:TransactionDateTimeStart>"
             "<t:TransactionFilter>"
             f'<t:CustomerIdentification>{cuenta["id"]}</t:CustomerIdentification>'
-            f"<t:EndRankDate>{hasta}T23:59:59</t:EndRankDate>"
-            f"<t:InitRankDate>{desde}T00:00:00</t:InitRankDate>"
+            f"<t:EndRankDate>{b}</t:EndRankDate>"
+            f"<t:InitRankDate>{a}</t:InitRankDate>"
             "<t:IsInvoiced>1</t:IsInvoiced>"
             "</t:TransactionFilter></r:Item>"
             f"{_paginacion(pagina)}{_seguridad(cuenta, ip)}"
@@ -237,6 +251,10 @@ def transacciones(cuenta: dict, ip: str, desde: dt.date, hasta: dt.date) -> list
         )
 
         raiz = _llamar("TransactionGetFilteredList", cuerpo)
+        errores = _errores(raiz)
+        if errores:
+            raise ErrorEdenred(" | ".join(m.strip() for m in errores))
+
         bloques = raiz.findall(f'.//{{{NS["trx"]}}}TransactionDTO')
         salida += bloques
 
@@ -244,6 +262,42 @@ def transacciones(cuenta: dict, ip: str, desde: dt.date, hasta: dt.date) -> list
             return salida
 
         pagina += 1
+
+
+# Ventana mínima al partir un rango que falla. Por debajo de esto se da por
+# perdida: es el renglón dañado mismo.
+VENTANA_MINIMA = dt.timedelta(minutes=1)
+
+
+def transacciones(cuenta: dict, ip: str, desde: dt.date, hasta: dt.date,
+                  omitidos: list | None = None) -> list:
+    """Todas las transacciones del rango, rodeando los renglones que Edenred
+    no puede devolver.
+
+    Una sola transacción con el chofer vacío hace que la API falle el rango
+    COMPLETO («Error parsing column 50 (DriverIdentification= - String)»,
+    `Success=false`). Pasó en sept–nov 2026 y, como el código viejo no
+    revisaba `Success`, la carga se quedó en «0 transacciones» desde el 13 de
+    octubre sin que nadie lo notara. Aquí un rango que falla se parte en
+    mitades hasta aislar el minuto dañado; ese minuto se anota en `omitidos`
+    y lo demás se carga. Es un error del lado de Edenred: reportárselo.
+    """
+    inicio = dt.datetime.combine(desde, dt.time.min)
+    fin = dt.datetime.combine(hasta, dt.time(23, 59, 59))
+    omitidos = omitidos if omitidos is not None else []
+
+    def recorrer(a: dt.datetime, b: dt.datetime) -> list:
+        try:
+            return _rango(cuenta, ip, a, b)
+        except ErrorEdenred as error:
+            if b - a <= VENTANA_MINIMA:
+                omitidos.append((a, b, str(error)))
+                return []
+            medio = a + (b - a) / 2
+            medio = medio.replace(microsecond=0)
+            return recorrer(a, medio) + recorrer(medio + dt.timedelta(seconds=1), b)
+
+    return recorrer(inicio, fin)
 
 
 def _catalogo(operacion: str, envoltura: str, elemento: str,
@@ -323,6 +377,18 @@ def _entero(valor):
         return None
 
 
+def _fecha(valor):
+    """Fecha de la API, o None. Lo que no tiene fecha llega como
+    `0001-01-01T00:00:00`, no vacío: se descarta todo lo anterior a 1900."""
+    if not valor:
+        return None
+    try:
+        momento = dt.datetime.fromisoformat(valor)
+    except ValueError:
+        return None
+    return momento.date() if momento.year >= 1900 else None
+
+
 def fila_transaccion(nodo, cuenta: dict, mapa: dict, sello) -> dict | None:
     autorizacion = _texto(nodo, "AuthorizationNumber", "trx")
     fecha_texto = _directo(nodo, "TransactionDate", "trx")
@@ -387,6 +453,7 @@ def fila_transaccion(nodo, cuenta: dict, mapa: dict, sello) -> dict | None:
         "nb_region": _texto(detalle, "RegionDescription", "trx"),
         "sn_facturada": _directo(nodo, "IsInvoiced", "trx") == "true",
         "nu_factura": _texto(detalle, "InvoiceReference", "trx"),
+        "fh_factura": _fecha(_texto(detalle, "InvoiceDate", "trx")),
         "fh_ingesta": sello,
     }
 
@@ -515,7 +582,8 @@ def ejecutar(desde: dt.date, hasta: dt.date, solo_catalogos: bool = False) -> in
                 print(f"   • {nombre}: catálogo refrescado ({len(mapa)} tarjetas)")
                 continue
 
-            nodos = transacciones(cuenta, ip, desde, hasta)
+            omitidos = []
+            nodos = transacciones(cuenta, ip, desde, hasta, omitidos)
             filas = [f for f in (fila_transaccion(n, cuenta, mapa, sello) for n in nodos) if f]
             sin_eco = sum(1 for f in filas if not f["eco"])
 
@@ -524,6 +592,8 @@ def ejecutar(desde: dt.date, hasta: dt.date, solo_catalogos: bool = False) -> in
 
             aviso = f", {sin_eco} sin económico" if sin_eco else ""
             print(f"   ✅ {nombre}: {len(filas)} transacciones{aviso}")
+            for a_, b_, motivo in omitidos:
+                print(f"      ⚠️ Edenred no devolvió {a_:%Y-%m-%d %H:%M:%S}–{b_:%H:%M:%S}: {motivo}")
         except Exception as error:
             # Una cuenta que falla no debe tumbar a las otras ocho: cada una es
             # una credencial distinta contra el mismo servicio.
@@ -541,6 +611,13 @@ def main_dias(dias: int = 7) -> int:
 def main() -> int:
     lector = argparse.ArgumentParser(description=__doc__)
     lector.add_argument("--dias", type=int, default=7)
+    lector.add_argument(
+        "--desde-mes-anterior", action="store_true",
+        help="Desde el día 1 del mes anterior. Es la corrida diaria: lo que se "
+             "cargó antes de facturarse llega con IVA, IEPS y factura vacíos, y "
+             "Edenred factura el mes el día 1 del siguiente. Repasar el mes "
+             "anterior completo lo corrige; el MERGE no duplica.",
+    )
     lector.add_argument("--desde")
     lector.add_argument("--hasta")
     lector.add_argument("--catalogos", action="store_true",
@@ -548,7 +625,12 @@ def main() -> int:
     args = lector.parse_args()
 
     hoy = dt.date.today()
-    desde = dt.date.fromisoformat(args.desde) if args.desde else hoy - dt.timedelta(days=args.dias)
+    if args.desde:
+        desde = dt.date.fromisoformat(args.desde)
+    elif args.desde_mes_anterior:
+        desde = (hoy.replace(day=1) - dt.timedelta(days=1)).replace(day=1)
+    else:
+        desde = hoy - dt.timedelta(days=args.dias)
     hasta = dt.date.fromisoformat(args.hasta) if args.hasta else hoy
 
     print(f"💎 Ticket Car · {desde} a {hasta}")

@@ -10,9 +10,9 @@ hace falta para moverlos a GCP como un conjunto de jobs.
 >
 > **Hueco detectado el 2026-11-05:** el consumo de **Ticket Car** a BigQuery
 > (`jobs_programados/ticketcar_api.py`) y el detalle de **casetas de Pase**
-> (`jobs_programados/pase_cruces.py`) no están programados en ningún lado. Solo
-> corren cuando alguien lanza `orquestador_maestro.py` a mano. Se agregan abajo
-> como jobs 13 y 14.
+> (`jobs_programados/pase_cruces.py`) no estaban programados. Se agregan abajo
+> como jobs 13 y 14. El 13 ya tiene agente de launchd diario
+> (`launchd/mx.petroil.controlvehicular.consumo-ticketcar.plist`); el 14 sigue a mano.
 >
 > El inventario de **todos los archivos** (cuáles son jobs, cuáles soporte,
 > cuáles retirados) está en la [sección 7](#7-inventario-de-archivos).
@@ -86,7 +86,7 @@ resultado. Hoy se resuelven por polling.
 | 10 | **Consumos Supramax** *(servidor Windows)* | `RPA_Utilitarios/jobs_programados/supramax_consumos_http.py --dias 10`, lanzado por `ejecutar_supramax_incremental.ps1` | Python + `requests` (sin Chrome) | BigQuery `rpa_utilitarios.consumos_flota` (MERGE) | nocturno | minutos |
 | 11 | **Cortes de peaje (Pase)** *(servidor Windows)* | `RPA_Utilitarios/jobs_programados/pase_rpa.py --clientes 16072 --posiciones 1 --hasta-nuevo-corte`, lanzado por `ejecutar_pase_cortes.ps1` | Python + **Selenium/Chrome** | BigQuery `flota.pase_cruces` | por corte | minutos |
 | 12 | **Resumen de preventivos** *(nuevo, aún sin instalar)* | `control-vehicular/src/database/resumen-preventivos.ts` (`pnpm preventivos:resumen`) | Node/Nest (MailGun + Web Push) | correo y push, solo lectura en la base | lunes 8:00 | < 1 min |
-| 13 | **Consumo Ticket Car** *(hoy solo a mano)* | `RPA_Utilitarios/jobs_programados/ticketcar_api.py` (`main_dias(7)`, desde el orquestador) | Python + SOAP de Edenred (sin Chrome) | BigQuery `flota.ticketcar_transacciones` | **ninguna** | minutos |
+| 13 | **Consumo Ticket Car** | `RPA_Utilitarios/jobs_programados/ticketcar_api.py --desde-mes-anterior` | Python + SOAP de Edenred (sin Chrome) | BigQuery `flota.ticketcar_transacciones` (con IEPS, factura y fecha de factura) | diario 3:30 (Mac, desde 2026-11-05) | minutos |
 | 14 | **Detalle de casetas Pase** *(hoy solo a mano)* | `RPA_Utilitarios/jobs_programados/pase_cruces.py` (después de `pase_rpa`, en el orquestador) | Python: lee los CSV de GCS | BigQuery `flota.pase_cruces` (WRITE_TRUNCATE) | **ninguna** | minutos |
 
 Los plists de los agentes de la Mac están en `~/Library/LaunchAgents/mx.petroil.controlvehicular.*.plist`. Los versionados:
@@ -149,7 +149,7 @@ Jobs**, con dos imágenes:
 | 10 Consumos Supramax | `python -m jobs_programados.supramax_consumos_http --dias 10` | nocturno | Sin Chrome. Sale con 1 si fallan todas las cuentas |
 | 11 Pase | `python -m jobs_programados.pase_rpa --clientes 16072 --posiciones 1 --hasta-nuevo-corte` | según cortes | Chrome |
 | 12 Resumen preventivos | `node dist/database/resumen-preventivos.js` | `0 8 * * 1` | Solo producción: manda correos y push reales |
-| 13 Consumo Ticket Car | `python -m jobs_programados.ticketcar_api --dias 7` | `30 3 * * *` | Edenred exige la IP de salida registrada: debe salir por la misma IP fija que el backend (`TICKETCAR_IP`) |
+| 13 Consumo Ticket Car | `python -m jobs_programados.ticketcar_api --desde-mes-anterior` | `30 3 * * *` | Repasa el mes anterior completo: lo cargado antes de facturar llega sin IVA, IEPS ni factura, y Edenred factura el día 1. Exige la IP de salida registrada (`TICKETCAR_IP`) |
 | 14 Casetas Pase | `python -m jobs_programados.pase_cruces` | después del 11 | Idempotente (relee todo GCS). Encadenarlo al 11, o programarlo una hora después |
 
 **BigQuery es compartido por todos los ambientes** (jobs 6, 10, 11, 13 y 14). Deben
@@ -264,7 +264,7 @@ dos primeras carpetas más `shared/` y `bigquery/`.
 | `fleetup_viajes.py` | 6 | Un solo job para todos los ambientes |
 | `supramax_consumos_http.py` | 10 | Sin Chrome. Hoy en Windows |
 | `pase_rpa.py` | 11 | Chrome + 2captcha. Hoy en Windows |
-| `ticketcar_api.py` | 13 | **Hoy no corre solo.** Necesita la IP registrada con Edenred |
+| `ticketcar_api.py` | 13 | Diario con `--desde-mes-anterior`. Necesita la IP registrada con Edenred |
 | `pase_cruces.py` | 14 | **Hoy no corre solo.** Va después del 11 |
 
 **`jobs_por_evento/`**: Cloud Run Job que el backend dispara al encolar.
