@@ -4,6 +4,14 @@ Procesos que alimentan a Control Vehicular desde fuera del backend: portales
 sin API (Supramax, Libro Azul, Pase), APIs de proveedores (FleetUp, Ticket Car)
 y cargas a BigQuery.
 
+> **Cambio de plan, 2026-11-06.** Por indicación de DevOps los jobs no van a
+> Cloud Run Jobs aparte: corren **dentro del pod del backend**. El código se
+> copió a `control-vehicular/rpa/` (desde ahora vive ahí), la imagen del
+> backend trae Chromium y Python, y cada job se dispara con
+> `POST /jobs/<nombre>` y la llave `JOBS_API_KEY`. Ver
+> `control-vehicular/rpa/README.md`. Lo de abajo queda como inventario y
+> referencia; las secciones 3, 4 y 7.1 ya no aplican.
+
 Organizado por **cómo se dispara** cada proceso, para migrarlos a Cloud Run
 Jobs (plan completo en [MIGRACION_JOBS_NUBE.md](MIGRACION_JOBS_NUBE.md)).
 

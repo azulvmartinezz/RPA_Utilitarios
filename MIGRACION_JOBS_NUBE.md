@@ -3,6 +3,14 @@
 Inventario de los procesos programados que hoy corren fuera del backend, y qué
 hace falta para moverlos a GCP como un conjunto de jobs.
 
+> **Cambio de plan, 2026-11-06.** Por indicación de DevOps los jobs no van a
+> Cloud Run Jobs aparte: corren **dentro del pod del backend**. El código se
+> copió a `control-vehicular/rpa/` (desde ahora vive ahí), la imagen del
+> backend trae Chromium y Python, y cada job se dispara con
+> `POST /jobs/<nombre>` y la llave `JOBS_API_KEY`. Ver
+> `control-vehicular/rpa/README.md`. Lo de abajo queda como inventario y
+> referencia; las secciones 3, 4 y 7.1 ya no aplican.
+
 > Estado al 2026-11-05. Hoy 9 procesos corren por **launchd en la Mac de
 > Anibal** y 2 en el **servidor Windows** (Programador de tareas). Los de la
 > Mac se conectan a la base de **dev** (`controlvehicular_dev`), así que test y
