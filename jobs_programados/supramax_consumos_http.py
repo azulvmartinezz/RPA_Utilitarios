@@ -43,7 +43,6 @@ import re
 import sys
 
 import pandas as pd
-import requests
 from dotenv import load_dotenv
 
 RAIZ_PROYECTO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -52,25 +51,16 @@ if RAIZ_PROYECTO not in sys.path:
 
 from bigquery.bq_ingestion import ingest_to_bigquery  # noqa: E402
 from shared.credenciales import resolver_cuentas  # noqa: E402
+from shared.supramax_http import entrar, nueva_sesion, salir, url_base  # noqa: E402
 
 load_dotenv()
 
-URL_BASE = os.getenv("SUPRAMAX_URL", "https://es09326.migasolinera.net/emaxclie/")
-if not URL_BASE.endswith("/"):
-    URL_BASE += "/"
-
 # Generoso a propósito: un mes completo de una cuenta grande tarda ~40 s.
 ESPERA_REPORTE = 180
-ESPERA_LOGIN = 25
 
 # El portal no corta los periodos, pero un mes por petición mantiene cada
 # página en los ~3 MB que ya se midieron.
 DIAS_POR_PETICION = 31
-
-# Lo que dice el portal cuando la contraseña no sirve, y el texto del
-# formulario de ingreso cuando nos regresa a él sin explicar.
-RECHAZO_LOGIN = "Cuenta de cliente no valida"
-SIGUE_EN_LOGIN = "Nombre de cliente"
 
 UTC_MENOS_7 = dt.timezone(dt.timedelta(hours=-7))
 
@@ -177,38 +167,6 @@ def _epoch_mazatlan(dia: dt.date, fin_de_dia: bool) -> int:
     return int(dt.datetime.combine(dia, hora, tzinfo=UTC_MENOS_7).timestamp())
 
 
-def _entrar(sesion: requests.Session, cuenta: dict) -> None:
-    pagina = sesion.get(URL_BASE, timeout=ESPERA_LOGIN)
-    token = re.search(r'name="timer_loginform"[^>]*value="([^"]*)"', pagina.text)
-
-    respuesta = sesion.post(
-        URL_BASE,
-        data={
-            "name_loginform": "loginform",
-            "timer_loginform": token.group(1) if token else "",
-            "response_loginform": "",
-            "username": cuenta.get("Usuario", ""),
-            "password": cuenta.get("Contraseña", ""),
-            "login": " Entrar ",
-        },
-        timeout=ESPERA_LOGIN,
-    )
-    html = respuesta.content.decode("latin1")
-
-    if RECHAZO_LOGIN in html:
-        raise RuntimeError("el portal rechazó usuario o contraseña")
-    if SIGUE_EN_LOGIN in html or len(html.strip()) < 500:
-        raise RuntimeError("el portal devolvió el formulario de ingreso sin explicar")
-
-
-def _salir(sesion: requests.Session) -> None:
-    """Cortesía: si falla, no cambia el resultado."""
-    try:
-        sesion.get(f"{URL_BASE}index.php", params={"lg": 1}, timeout=ESPERA_LOGIN)
-    except requests.RequestException:
-        pass
-
-
 def _tramos(desde: dt.date, hasta: dt.date):
     inicio = desde
     while inicio <= hasta:
@@ -218,14 +176,14 @@ def _tramos(desde: dt.date, hasta: dt.date):
 
 
 def consumos_de_cuenta(cuenta: dict, desde: dt.date, hasta: dt.date) -> list[dict]:
-    sesion = requests.Session()
-    _entrar(sesion, cuenta)
+    sesion = nueva_sesion()
+    entrar(sesion, cuenta)
 
     try:
         cargas = []
         for inicio, fin in _tramos(desde, hasta):
             respuesta = sesion.get(
-                f"{URL_BASE}intmain.php",
+                f"{url_base()}intmain.php",
                 params={
                     "nd": 2,
                     "re": "ccl",
@@ -246,7 +204,7 @@ def consumos_de_cuenta(cuenta: dict, desde: dt.date, hasta: dt.date) -> list[dic
             cargas.extend(leer_consumos(html))
         return cargas
     finally:
-        _salir(sesion)
+        salir(sesion)
 
 
 # --------------------------------------------------------------------------

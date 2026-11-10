@@ -2,33 +2,32 @@
 pantalla "Saldos y recargas" de Control Vehicular pueda mostrarlos junto con
 Ticket Car sin abrir Chrome por cada quien la visite.
 
-DISEÑADO PARA CORRER COMO PROCESO CORTO, DISPARADO POR CRON
+DISEÑADO PARA CORRER COMO PROCESO CORTO
 
-Este script hace UNA pasada por todas las cuentas de `SUPRAMAX_CREDENTIALS` y
-termina -- no trae un loop interno de "cada 30 minutos". Ese intervalo lo
-pone quien lo invoca: hoy `saldos_supramax_cada_30min.sh` vía cron/launchd en
-la Mac de Anibal, más adelante (sin tocar este archivo) un Cloud Run Job
-disparado por Cloud Scheduler con el mismo período. No guarda estado propio
-en disco entre corridas -- lo único persistente es el perfil de Chrome de
-Selenium, que solo sirve para no repetir el login de cero cada vez que
-Supramax lo permite.
+Este script hace UNA pasada por todas las cuentas y termina -- no trae un
+loop interno de "cada 30 minutos". Ese intervalo lo pone quien lo invoca: el
+scheduler (`POST /jobs/supramax-saldos`) o launchd en la Mac. Lo usa también
+el botón «Actualizar Supramax» (`supramax_actualizar_bajo_demanda.py`).
+
+SIN NAVEGADOR (DESDE EL 2026-11-09)
+
+Antes abría un Chrome por cuenta, tres a la vez: 2,753 MB medidos, y el pod
+de test (1 GB) se reiniciaba cada vez que alguien pedía «Actualizar
+Supramax». Ahora es HTTP puro (`shared/supramax_http.py`): login por POST de
+formulario y un GET de `intmain.php?nd=1&ad=crd`, que trae TODAS las tarjetas
+de la cuenta en un solo HTML -- el DataTables pagina del lado del navegador,
+no del servidor. 155 MB el proceso entero, mismas tarjetas que con Chrome.
+
+Las cuentas se leen en paralelo con hilos (`SUPRAMAX_HTTP_WORKERS`, 4 por
+omisión): cada una tarda ~6 s, casi todo esperando al portal, y un hilo con
+una sesión de `requests` no pesa nada. Cada hilo tiene su propia sesión, así
+que no comparten cookies.
 
 TODA LA CONFIGURACIÓN SALE DE VARIABLES DE ENTORNO / SECRET MANAGER
 
-`SUPRAMAX_CREDENTIALS` (cuentas), `SUPRAMAX_URL` (portal), `SUPRAMAX_MAX_WORKERS`
-(tamaño del pool) y `SECRETO_CONTROL_VEHICULAR` (credenciales de Postgres) --
-nada de esto está fijo en el código. Es lo mismo que pide migrar esto a Cloud
-Run después: el mismo contenedor sirve para el cron local de hoy y para un
-job remoto mañana con solo cambiar variables de entorno.
-
-VARIAS CUENTAS EN PARALELO, PERFILES DE CHROME SEPARADOS
-
-Se usa `shared/pool_navegadores.py`: cada cuenta de empresa corre en su
-propio thread con su propio `webdriver` y su propio directorio de perfil de
-Chrome (`chrome_profile/supramax/saldos/<empresa>`), para no compartir sesión
-entre cuentas concurrentes ni con `supramax_rpa.py`
-(`chrome_profile/supramax`) o `supramax_dispersion_rpa.py`
-(`chrome_profile/supramax/dispersion/<empresa>`).
+Credenciales (`proveedores_credenciales`, o `SUPRAMAX_CREDENTIALS` de
+respaldo), `SUPRAMAX_URL` (portal), `SUPRAMAX_HTTP_WORKERS` y
+`SECRETO_CONTROL_VEHICULAR` (Postgres) -- nada de esto está fijo en el código.
 
 CÓMO SE CRUZA CADA FILA DEL PORTAL CONTRA NUESTRA BASE
 
@@ -59,20 +58,18 @@ registra en el log sin tronar (ver `_guardar_resultados`).
 
 from __future__ import annotations
 
-import json
+import concurrent.futures
 import os
 import re
 import sys
-import time
+import traceback
 import unicodedata
+from dataclasses import dataclass
 from decimal import Decimal
 
 import psycopg2
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 
 RAIZ_PROYECTO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if RAIZ_PROYECTO not in sys.path:
@@ -81,10 +78,33 @@ if RAIZ_PROYECTO not in sys.path:
 from shared.db import conectar_postgres  # noqa: E402
 from shared.numeros import a_decimal  # noqa: E402
 from shared.credenciales import resolver_cuentas  # noqa: E402
-from shared.pool_navegadores import ejecutar_en_paralelo  # noqa: E402
-from shared.supramax_login import iniciar_sesion  # noqa: E402
+from shared.supramax_http import LoginRechazado, entrar, nueva_sesion, salir, url_base  # noqa: E402
 
 load_dotenv()
+
+# El listado trae todo en una página: 120 KB la cuenta más grande. El tope es
+# para un portal colgado, no para una página lenta.
+ESPERA_LISTADO = 90
+
+# Lo que pone el portal en lugar de la tabla cuando la cuenta no tiene
+# vehículos (Petroil Marine) y cuando la sesión ya no sirve.
+SIN_VEHICULOS = "No existen registros de veh"
+SESION_CADUCADA = "Su sesion de usuario ha caducado"
+
+
+@dataclass
+class ResultadoCuenta:
+    """Lo mismo que regresaba el pool de Chrome, para que `_guardar_resultados`
+    no cambie: `ok` es «se pudo procesar», `resultado` trae `login_ok` y
+    `filas`, y `error` la traza si algo reventó."""
+
+    cuenta: dict
+    resultado: dict | None = None
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
 
 # `id_tipotarjeta` de Supramax (5) y Petroil Pay (1) -- ambas se dispersan en
 # Supramax, ver `db/esquema/28_solicitudes_combustible.sql`.
@@ -173,53 +193,6 @@ def _parsear_filas(html: str) -> list[dict]:
     return filas
 
 
-# Ver `_recolectar_todas_las_filas`: con 25 filas por página son 1,250 tarjetas.
-PAGINAS_MAXIMAS = 50
-
-
-def _recolectar_todas_las_filas(driver, wait) -> list[dict]:
-    """Recorre la paginación de DataTables (`#reporte_next`) hasta que el
-    botón "siguiente" quede deshabilitado. Se navega por el DOM en vez de
-    asumir que todas las filas ya están cargadas de entrada: no está probado
-    si `dataTable({bFilter:true})` pagina del lado del cliente sobre todas
-    las filas o si el portal las manda por página."""
-    filas: list[dict] = []
-    vistos: set[str] = set()
-
-    # Tope de páginas y salida si una página no trae nada nuevo: el 27-10-2026
-    # la cuenta IMAA se quedó 10 minutos aquí -- el botón «siguiente» nunca se
-    # marcó deshabilitado y el ciclo volvía a hacer clic sobre la misma
-    # página, con el pool entero esperándola. Ninguna cuenta pasa de unas
-    # cuantas páginas; si una página repite lo ya visto, ya se terminó.
-    for _pagina in range(PAGINAS_MAXIMAS):
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, "reporte")))
-        time.sleep(0.3)
-
-        nuevas = 0
-        for fila in _parsear_filas(driver.page_source):
-            if fila["idv"] not in vistos:
-                vistos.add(fila["idv"])
-                filas.append(fila)
-                nuevas += 1
-
-        if nuevas == 0 and filas:
-            break
-
-        try:
-            siguiente = driver.find_element(By.ID, "reporte_next")
-        except Exception:  # noqa: BLE001
-            break
-
-        clases = siguiente.get_attribute("class") or ""
-        if "paginate_button_disabled" in clases:
-            break
-
-        driver.execute_script("arguments[0].click();", siguiente)
-        time.sleep(1)
-
-    return filas
-
-
 def _reportar(avance, cuenta: dict, paso: str, **extra) -> None:
     """Avisa el paso de una cuenta a quien esta mirando, si hay alguien.
 
@@ -235,21 +208,20 @@ def _reportar(avance, cuenta: dict, paso: str, **extra) -> None:
         print(f"⚠️ No se pudo reportar el avance ({paso}): {error}")
 
 
-# Lo que Selenium lanza, dicho como lo entiende quien mira la pantalla.
+# Lo que lanza la red, dicho como lo entiende quien mira la pantalla.
 _ERRORES_LEGIBLES = {
-    "TimeoutException": "Se agotó el tiempo esperando al portal.",
-    "NoSuchElementException": "El portal no mostró la página esperada.",
-    "WebDriverException": "El navegador del robot falló.",
-    "SessionNotCreatedException": "No se pudo abrir el navegador del robot.",
+    "ReadTimeout": "Se agotó el tiempo esperando al portal.",
+    "ConnectTimeout": "El portal no contestó.",
+    "ConnectionError": "No se pudo conectar con el portal.",
+    "SSLError": "Falló la conexión segura con el portal.",
 }
 
 
 def _error_legible(error: str | None) -> str:
     """Un renglón que explique el error de una cuenta.
 
-    El primer renglón no sirve: las excepciones de Selenium sin mensaje dejan
-    solo "Message: " (asi quedo Petroil Marine el 2026-10-24). Se busca, de
-    abajo hacia arriba en la traza, el renglón con el tipo de excepción."""
+    Se busca, de abajo hacia arriba en la traza, el renglón con el tipo de
+    excepción: el primero suele ser «Traceback (most recent call last):»."""
     renglones = [r.strip() for r in (error or "").splitlines() if r.strip()]
     for renglon in reversed(renglones):
         for tipo, texto in _ERRORES_LEGIBLES.items():
@@ -260,27 +232,62 @@ def _error_legible(error: str | None) -> str:
     return renglones[0][:200] if renglones else "Error inesperado."
 
 
-def _procesar_cuenta(driver, cuenta: dict, base_url: str, descargas_dir: str, avance=None) -> dict:
-    """Login (vía `shared/supramax_login.py`) + navegar al listado de
-    créditos + parsear. Se ejecuta dentro de un worker del pool -- cualquier
-    excepción la atrapa `pool_navegadores._correr_cuenta`, no hace falta un
-    try/except propio aquí salvo para el caso de login fallido, que no es un
-    error inesperado sino algo que hay que decidir cómo reportar."""
+def _leer_listado(html: str) -> list[dict]:
+    """Las filas del listado de créditos, distinguiendo «la cuenta no tiene
+    vehículos» de «el portal no nos mostró el listado»: las dos dejan cero
+    filas, pero la segunda no es un saldo y no debe guardarse como tal."""
+    if 'id="reporte"' in html:
+        return _parsear_filas(html)
+    if SIN_VEHICULOS in html:
+        return []
+    if SESION_CADUCADA in html:
+        raise RuntimeError("el portal cerró la sesión antes de mostrar los créditos")
+    raise RuntimeError("el portal no mostró el listado de créditos")
+
+
+def _procesar_cuenta(cuenta: dict, avance=None) -> dict:
+    """Login + listado de créditos + parseo, por HTTP. Corre en un hilo del
+    pool; lo que no sea un login rechazado lo atrapa `_correr_cuenta`.
+
+    El login rechazado no es una excepción aquí: es un resultado esperado
+    (`login_ok` en falso) que `_guardar_resultados` convierte en ERROR_LOGIN
+    sobre los saldos de esa empresa."""
     _reportar(avance, cuenta, "SESION")
+    sesion = nueva_sesion()
 
-    if not iniciar_sesion(driver, cuenta, base_url, descargas_dir, "saldos"):
-        _reportar(avance, cuenta, "ERROR_LOGIN", detalle="No se pudo iniciar sesión en el portal.")
-        return {"login_ok": False, "filas": []}
+    try:
+        try:
+            entrar(sesion, cuenta)
+        except LoginRechazado:
+            _reportar(avance, cuenta, "ERROR_LOGIN", detalle="El portal rechazó usuario o contraseña.")
+            return {"login_ok": False, "filas": []}
 
-    _reportar(avance, cuenta, "LEYENDO")
+        _reportar(avance, cuenta, "LEYENDO")
+        respuesta = sesion.get(
+            f"{url_base()}intmain.php", params={"nd": 1, "ad": "crd"}, timeout=ESPERA_LISTADO
+        )
+        respuesta.raise_for_status()
+        filas = _leer_listado(respuesta.content.decode("latin1"))
+    finally:
+        salir(sesion)
+        sesion.close()
 
-    wait = WebDriverWait(driver, 15)
-    url_creditos = f"{base_url}intmain.php?nd=1&ad=crd"
-    driver.get(url_creditos)
-
-    filas = _recolectar_todas_las_filas(driver, wait)
     _reportar(avance, cuenta, "LEIDA", tarjetas=len(filas))
     return {"login_ok": True, "filas": filas}
+
+
+def _correr_cuenta(cuenta: dict, avance=None) -> ResultadoCuenta:
+    try:
+        return ResultadoCuenta(cuenta=cuenta, resultado=_procesar_cuenta(cuenta, avance))
+    except Exception:  # noqa: BLE001 -- una cuenta caída no tumba a las demás
+        return ResultadoCuenta(cuenta=cuenta, error=traceback.format_exc())
+
+
+def _leer_cuentas(cuentas: list[dict], avance=None) -> list[ResultadoCuenta]:
+    hilos = max(1, int(os.getenv("SUPRAMAX_HTTP_WORKERS", "4")))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=hilos) as executor:
+        return list(executor.map(lambda cuenta: _correr_cuenta(cuenta, avance), cuentas))
 
 
 def _mapa_tarjetas_supramax(cursor) -> dict[str, tuple[int, int]]:
@@ -577,39 +584,15 @@ def ejecutar_actualizacion_saldos(avance=None) -> dict:
             "total_prestaciones": 0,
         }
 
-    max_workers = int(os.getenv("SUPRAMAX_MAX_WORKERS", "3"))
-    headless = os.getenv("SUPRAMAX_HEADLESS", "true").strip().lower() != "false"
-
-    base_url = os.getenv("SUPRAMAX_URL", "https://es09326.migasolinera.net/emaxclie/")
-    if not base_url.endswith("/"):
-        base_url += "/"
-
-    descargas_dir = os.path.join(os.getcwd(), "descargas_temporales")
-    os.makedirs(descargas_dir, exist_ok=True)
-
-    # Prefijo de perfil propio de este script: nunca `chrome_profile/supramax`
-    # a secas (ese es de `supramax_rpa.py`) ni `.../dispersion` (ese es de
-    # `supramax_dispersion_rpa.py`).
-    perfil_base = os.path.join(os.getcwd(), "chrome_profile", "supramax", "saldos")
-
-    print(f"Iniciando refresco de saldos de Supramax: {len(cuentas)} cuenta(s), hasta {max_workers} en paralelo.")
+    print(f"Iniciando refresco de saldos de Supramax por HTTP: {len(cuentas)} cuenta(s).")
 
     if avance is not None:
         avance.iniciar([c.get("Empresa", "?") for c in cuentas])
 
-    resultados = ejecutar_en_paralelo(
-        cuentas=cuentas,
-        max_workers=max_workers,
-        funcion_por_cuenta=lambda driver, cuenta: _procesar_cuenta(
-            driver, cuenta, base_url, descargas_dir, avance
-        ),
-        perfil_base=perfil_base,
-        headless=headless,
-        descargas_dir=descargas_dir,
-    )
+    resultados = _leer_cuentas(cuentas, avance)
 
-    # Las que reventaron dentro del pool (Chrome no abrio, excepcion no
-    # prevista) no alcanzaron a reportar nada propio.
+    # Las que reventaron (red, portal que no mostró el listado) no
+    # alcanzaron a reportar nada propio.
     for resultado in resultados:
         if not resultado.ok:
             _reportar(avance, resultado.cuenta, "ERROR", detalle=_error_legible(resultado.error))

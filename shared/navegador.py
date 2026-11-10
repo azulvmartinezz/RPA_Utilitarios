@@ -148,3 +148,30 @@ def version_mayor(binario=None):
         return int(encontrado.group(1)) if encontrado else None
     except Exception:  # noqa: BLE001
         return None
+
+
+# --- En el contenedor del backend --------------------------------------------
+#
+# En la imagen de `control-vehicular` (ver `rpa/README.md`) Chrome es el
+# Chromium de Debian y corre como root dentro de Kubernetes. Dos cosas cambian
+# respecto a la Mac y al servidor Windows, y se leen del entorno para no tocar
+# nada en esos dos lugares:
+#
+# - CHROME_ARGS_EXTRA: banderas que se suman a las de cada scraper. En el
+#   contenedor va `--no-sandbox --disable-dev-shm-usage`: el /dev/shm de un pod
+#   es de 64 MB y Chrome se cae al llenarlo.
+# - CHROMEDRIVER_PATH: el chromedriver del paquete `chromium-driver`, de la
+#   misma versión que el navegador. Sin él, `undetected_chromedriver` lo baja
+#   de internet en cada corrida.
+
+
+def argumentos_extra():
+    """Banderas de CHROME_ARGS_EXTRA, separadas por espacio."""
+    return [a for a in os.getenv("CHROME_ARGS_EXTRA", "").split() if a]
+
+
+def chromedriver_sistema():
+    """Ruta de CHROMEDRIVER_PATH si existe, o None para el descubrimiento normal."""
+    ruta = os.getenv("CHROMEDRIVER_PATH")
+
+    return ruta if ruta and os.path.exists(ruta) else None

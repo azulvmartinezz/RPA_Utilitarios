@@ -33,7 +33,7 @@ de las demás cuentas que sí van bien.
 PENSADO PARA CLOUD RUN
 
 `max_workers` sale de quien llama (que a su vez lo lee de una variable de
-entorno, ej. `SUPRAMAX_MAX_WORKERS`) -- este módulo no fija un default de
+entorno, ej. `SUPRAMAX_DISPERSION_WORKERS`) -- este módulo no fija un default de
 concurrencia por su cuenta. El mismo código sirve para 3-4 workers en la Mac
 de Anibal hoy y para más paralelismo en un Cloud Run Job después, sin tocar
 esta lógica.
@@ -115,8 +115,17 @@ def _build_chrome_options(perfil_dir: str, headless: bool, descargas_dir: str | 
     if headless:
         opciones.add_argument("--headless=new")
 
-    opciones.add_argument("--window-size=1920,1080")
+    # Ventana más chica: menos superficie que pintar y menos memoria de
+    # compositor. El portal de Supramax cabe completo en 1366 de ancho.
+    opciones.add_argument("--window-size=1366,768")
     opciones.add_argument("--no-sandbox")
+    # Un solo proceso de renderer para todas las pestañas e iframes: el robot
+    # abre una página a la vez y cada renderer extra es memoria duplicada.
+    opciones.add_argument("--renderer-process-limit=1")
+    opciones.add_argument("--disable-extensions")
+    opciones.add_argument("--mute-audio")
+    if _bloquear_recursos():
+        opciones.add_argument("--blink-settings=imagesEnabled=false")
     opciones.add_argument("--disable-dev-shm-usage")
     opciones.add_argument("--disable-gpu")
     opciones.add_argument("--disable-software-rasterizer")
@@ -136,6 +145,9 @@ def _build_chrome_options(perfil_dir: str, headless: bool, descargas_dir: str | 
         "--disable-features=OptimizationGuideModelDownloading,"
         "OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints"
     )
+
+    for argumento in navegador.argumentos_extra():
+        opciones.add_argument(argumento)
 
     os.makedirs(perfil_dir, exist_ok=True)
     opciones.add_argument(f"--user-data-dir={perfil_dir}")
@@ -161,6 +173,33 @@ def _build_chrome_options(perfil_dir: str, headless: bool, descargas_dir: str | 
 
 SEGUNDOS_CARGA_PAGINA = 60
 
+# Lo que el robot no necesita para llenar un formulario: hojas de estilo,
+# imágenes, fuentes y video. El JavaScript NO se bloquea -- el formulario de
+# dispersión genera su token anti-bot (`submissionId`) con JS.
+RECURSOS_BLOQUEADOS = [
+    "*.css", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.ico", "*.webp",
+    "*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot", "*.mp4", "*.webm",
+]
+
+
+def _bloquear_recursos() -> bool:
+    """`SUPRAMAX_BLOQUEAR_RECURSOS=false` lo apaga, por si el portal cambia y
+    algo deja de verse sin sus estilos."""
+    return os.getenv("SUPRAMAX_BLOQUEAR_RECURSOS", "true").strip().lower() != "false"
+
+
+def _aplicar_bloqueo(driver) -> None:
+    """Por DevTools y no por banderas: Chrome no tiene una para no bajar CSS.
+    Si el driver no lo soporta, se sigue sin bloqueo -- es ahorro, no algo de
+    lo que dependa la corrida."""
+    if not _bloquear_recursos():
+        return
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": RECURSOS_BLOQUEADOS})
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ⚠️ No se pudo activar el bloqueo de recursos: {exc}")
+
 
 def crear_driver(perfil_dir: str, headless: bool = True, descargas_dir: str | None = None):
     """Arranca un Chrome con perfil dedicado, con la misma resiliencia de
@@ -171,6 +210,14 @@ def crear_driver(perfil_dir: str, headless: bool = True, descargas_dir: str | No
     `chrome_profile/supramax`."""
     opciones = _build_chrome_options(perfil_dir, headless, descargas_dir)
     errores = []
+
+    # En el contenedor: el chromedriver de Debian, de la versión del Chromium.
+    driver_sistema = navegador.chromedriver_sistema()
+    if driver_sistema:
+        try:
+            return webdriver.Chrome(service=Service(driver_sistema), options=opciones)
+        except Exception as exc:  # noqa: BLE001
+            errores.append(f"ChromeDriver del sistema ({driver_sistema}): {exc}")
 
     try:
         return webdriver.Chrome(options=opciones)
@@ -221,6 +268,7 @@ def _correr_cuenta(
         # colgado sin límite. Ver el atoro de IMAA del 27-10-2026.
         driver.set_page_load_timeout(SEGUNDOS_CARGA_PAGINA)
         driver.set_script_timeout(SEGUNDOS_CARGA_PAGINA)
+        _aplicar_bloqueo(driver)
         resultado = funcion_por_cuenta(driver, cuenta)
         return ResultadoCuenta(cuenta=cuenta, resultado=resultado)
     except Exception as error:  # noqa: BLE001

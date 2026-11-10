@@ -809,11 +809,19 @@ def main() -> int:
     # Dos: si el segundo intento tampoco entra, se detiene y lo dice. Un
     # tercero contra un portal que ya rechazó dos veces solo retrasa el aviso.
     intentos_maximos = int(os.getenv("SUPRAMAX_DISPERSION_INTENTOS_MAX", "2"))
-    max_workers = int(os.getenv("SUPRAMAX_MAX_WORKERS", "3"))
-    # El tamaño del lote de jobs a tomar por corrida sigue al tamaño del pool
-    # por defecto: no tiene caso tomar más jobs de los que se pueden atender
-    # en paralelo en esta misma pasada.
-    tamano_lote = int(os.getenv("SUPRAMAX_DISPERSION_LOTE", str(max_workers)))
+    # UN Chrome a la vez (2026-11-09): con tres, el robot de saldos llegó a
+    # 2.7 GB y tumbaba el pod de test (1 GB). Las cuentas del lote se atienden
+    # en fila con ese único navegador.
+    max_workers = int(os.getenv("SUPRAMAX_DISPERSION_WORKERS", "1"))
+    # El lote ya no sigue al tamaño del pool: con un solo Chrome tomaría una
+    # recarga por corrida y las demás esperarían al siguiente disparo.
+    #
+    # Tres, como antes, y no más: todo el lote se marca EN_PROCESO al tomarlo
+    # y `_recuperar_huerfanos` devuelve a la cola lo que pase de
+    # SUPRAMAX_DISPERSION_HUERFANO_MIN (10). En fila con un solo Chrome, un
+    # lote grande podría pasar de ese tiempo y la recarga se repetiría: dinero
+    # real dos veces. Tres en fila son ~2 minutos.
+    tamano_lote = int(os.getenv("SUPRAMAX_DISPERSION_LOTE", "3"))
     headless = os.getenv("SUPRAMAX_HEADLESS", "true").strip().lower() != "false"
 
     # Primero la tabla `proveedores_credenciales`, y solo si está vacía el

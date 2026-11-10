@@ -7,16 +7,16 @@ esperar el próximo ciclo. Ver `db/esquema/32_supramax_refresh_jobs.sql` (en
 
 DISEÑADO PARA CORRER CADA ~1 MINUTO, Y SALIR BARATO CUANDO NO HAY NADA
 
-A diferencia de `supramax_saldos_rpa.py` (que siempre abre Chrome para las
-cuentas configuradas) y de `supramax_dispersion_rpa.py` (que solo abre Chrome
-si hay jobs), este script corre mucho más seguido -- cada minuto, contra cada
+A diferencia de `supramax_saldos_rpa.py` (que siempre entra a todas las
+cuentas configuradas, por HTTP desde 2026-11-09) y de
+`supramax_dispersion_rpa.py` (que solo abre Chrome si hay jobs), este script
+corre mucho más seguido -- cada minuto, contra cada
 30 minutos o cada 1-2 minutos de los otros dos. La inmensa mayoría de esas
 corridas no van a encontrar ningún pedido pendiente, así que el costo de "no
 hay nada que hacer" tiene que quedarse en una consulta SQL (`_tomar_job_
-pendiente`) y nunca llegar a loguear en el portal. Por eso este archivo NO
-importa Selenium directamente -- solo lo hace, indirectamente, al llamar
-`ejecutar_actualizacion_saldos()`, y solo cuando de verdad hay un job que
-tomar.
+pendiente`) y nunca llegar a loguear en el portal: solo se entra al portal
+al llamar `ejecutar_actualizacion_saldos()`, y solo cuando de verdad hay un
+job que tomar.
 
 NO REIMPLEMENTA EL SCRAPING
 
