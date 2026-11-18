@@ -28,6 +28,8 @@ import time
 
 import pandas as pd
 import psycopg2
+import google.api_core.exceptions
+import google.auth.exceptions
 import requests
 from google.cloud import bigquery
 from google.cloud import secretmanager
@@ -322,6 +324,41 @@ def cargar(cliente_bq: bigquery.Client, filas: list) -> int:
     return len(tabla)
 
 
+INTENTOS_CARGA = 4
+ESPERA_CARGA_SEGUNDOS = (30, 60, 120)
+
+
+def cargar_con_reintentos(cliente_bq: bigquery.Client, filas: list) -> int:
+    """`cargar` con reintentos ante cortes de red.
+
+    Del 10 al 16 de noviembre de 2026 la corrida de las 3:00 falló las seis
+    noches en este paso: bajaba bien los viajes de FleetUp y, al subirlos, la
+    renovación del token de Google se cortaba (`TransportError: Connection
+    aborted / RemoteDisconnected`). Se perdía todo lo descargado. Es un error
+    pasajero de red, así que se reintenta con pausas crecientes antes de
+    rendirse. El MERGE por (dev_id, fh_inicio) hace seguro repetir la carga.
+    """
+    for intento in range(1, INTENTOS_CARGA + 1):
+        try:
+            return cargar(cliente_bq, filas)
+        except (
+            google.auth.exceptions.TransportError,
+            google.api_core.exceptions.ServerError,
+            requests.exceptions.ConnectionError,
+        ) as error:
+            if intento == INTENTOS_CARGA:
+                raise
+
+            espera = ESPERA_CARGA_SEGUNDOS[intento - 1]
+            print(
+                f"⚠️  La carga a BigQuery falló (intento {intento}/{INTENTOS_CARGA}): "
+                f"{str(error)[:160]}. Reintento en {espera} s."
+            )
+            time.sleep(espera)
+
+    return 0
+
+
 def ejecutar(
     desde: dt.date,
     hasta: dt.date,
@@ -351,7 +388,7 @@ def ejecutar(
 
     print(f"Dispositivos a consultar: {len(dispositivos)}")
     filas, fallos = traer_viajes(cfg, token, dispositivos, desde, hasta, pausa)
-    cargados = cargar(cliente_bq, filas)
+    cargados = cargar_con_reintentos(cliente_bq, filas)
 
     if fallos:
         # Se reportan en vez de morir: un dispositivo que falla no debe tirar
